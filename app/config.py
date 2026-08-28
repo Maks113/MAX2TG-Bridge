@@ -18,7 +18,7 @@ class Settings:
     tg_allowed_user_id: int | None = None
     debug_dump_json: bool = False
     max_download_mb: int = 50
-    tg_upload_mb: int = 20
+    tg_upload_mb: int = 50
 
 
 def load_settings() -> Settings:
@@ -75,5 +75,5 @@ def load_settings() -> Settings:
         tg_allowed_user_id=allowed_user_id,
         debug_dump_json=os.environ.get("DEBUG_DUMP_JSON", "").lower() in ("1", "true", "yes"),
         max_download_mb=_int_env("MAX_DOWNLOAD_MB", 50),
-        tg_upload_mb=_int_env("TG_UPLOAD_MB", 20),
+        tg_upload_mb=_int_env("TG_UPLOAD_MB", 50),
     )

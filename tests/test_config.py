@@ -53,7 +53,7 @@ class TestSettingsDataclass:
         assert s.max_chat_ids is None
         assert s.debug_dump_json is False
         assert s.max_download_mb == 50
-        assert s.tg_upload_mb == 20
+        assert s.tg_upload_mb == 50
 
 
 # ---------------------------------------------------------------------------

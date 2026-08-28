@@ -25,7 +25,7 @@ TOPIC_STORE_KEY = "topic_store"
 ALLOWED_USER_KEY = "allowed_user_id"
 SUPERGROUP_KEY = "supergroup_id"
 MAX_UPLOAD_BYTES_KEY = "max_upload_bytes"
-DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 _MAX_URL_RE = re.compile(r"https?://(?:web\.)?max\.ru/(-?\d+)")
 
