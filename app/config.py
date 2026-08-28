@@ -15,7 +15,7 @@ class Settings:
     debug: bool = False
     reply_enabled: bool = False
     state_dir: str = "state"
-    tg_allowed_user_id: int | None = None
+    tg_allowed_user_ids: frozenset[int] | None = None
     debug_dump_json: bool = False
     max_download_mb: int = 50
     tg_upload_mb: int = 50
@@ -40,15 +40,21 @@ def load_settings() -> Settings:
             f"TG_CHAT_ID must be a valid integer, got: {tg_chat_id!r}"
         )
 
-    allowed_raw = os.environ.get("TG_ALLOWED_USER_ID") or None
-    allowed_user_id: int | None = None
+    allowed_raw = (os.environ.get("TG_ALLOWED_USER_IDS")
+                   or os.environ.get("TG_ALLOWED_USER_ID") or None)
+    allowed_user_ids: frozenset[int] | None = None
     if allowed_raw:
         try:
-            allowed_user_id = int(allowed_raw)
+            allowed_user_ids = frozenset(
+                int(value.strip()) for value in allowed_raw.split(",") if value.strip()
+            )
         except ValueError:
             raise SystemExit(
-                f"TG_ALLOWED_USER_ID must be a valid integer, got: {allowed_raw!r}"
+                "TG_ALLOWED_USER_IDS must be a comma-separated list of integers, "
+                f"got: {allowed_raw!r}"
             )
+        if not allowed_user_ids:
+            allowed_user_ids = None
 
     def _int_env(name: str, default: int) -> int:
         raw = os.environ.get(name)
@@ -72,7 +78,7 @@ def load_settings() -> Settings:
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
         state_dir=os.environ.get("STATE_DIR") or "state",
-        tg_allowed_user_id=allowed_user_id,
+        tg_allowed_user_ids=allowed_user_ids,
         debug_dump_json=os.environ.get("DEBUG_DUMP_JSON", "").lower() in ("1", "true", "yes"),
         max_download_mb=_int_env("MAX_DOWNLOAD_MB", 50),
         tg_upload_mb=_int_env("TG_UPLOAD_MB", 50),

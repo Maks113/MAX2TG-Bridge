@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 
 MAX_CLIENT_KEY = "max_client"
 TOPIC_STORE_KEY = "topic_store"
-ALLOWED_USER_KEY = "allowed_user_id"
+ALLOWED_USER_KEY = "allowed_user_ids"
 SUPERGROUP_KEY = "supergroup_id"
 MAX_UPLOAD_BYTES_KEY = "max_upload_bytes"
 DEFAULT_MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -97,6 +97,16 @@ def _parse_max_chat_id(s: str) -> int | None:
     return None
 
 
+def _user_is_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Allow everyone when no allowlist is configured, otherwise require membership."""
+    allowed_user_ids = context.bot_data.get(ALLOWED_USER_KEY)
+    if not allowed_user_ids or not update.effective_user:
+        return True
+    if isinstance(allowed_user_ids, int):  # backwards compatibility for callers/tests
+        allowed_user_ids = {allowed_user_ids}
+    return update.effective_user.id in allowed_user_ids
+
+
 def _peer_id_in_dm(resolver, chat_id) -> int | None:
     """Return the other participant of a DIALOG chat (i.e., not us)."""
     chat = resolver.chats_raw.get(chat_id) or {}
@@ -124,8 +134,7 @@ def _resolve_topic_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     max_chat_id = topic_store.chat_for_topic(thread_id) if topic_store else None
     if max_chat_id is None:
         return None
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _user_is_allowed(update, context):
         return None
     max_client: MaxClient | None = context.bot_data.get(MAX_CLIENT_KEY)
     return message, max_chat_id, max_client
@@ -400,8 +409,7 @@ async def _cmd_bind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _user_is_allowed(update, context):
         return
 
     args = context.args or []
@@ -507,8 +515,7 @@ async def _cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _user_is_allowed(update, context):
         return
 
     args = context.args or []
@@ -655,8 +662,7 @@ async def _cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if message is None:
         return
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _user_is_allowed(update, context):
         return
 
     target = _resolve_topic_target(update, context)
@@ -691,8 +697,7 @@ async def _on_del_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     await query.answer()
 
-    allowed_user_id = context.bot_data.get(ALLOWED_USER_KEY)
-    if allowed_user_id and update.effective_user and update.effective_user.id != allowed_user_id:
+    if not _user_is_allowed(update, context):
         return
 
     parts = query.data.split(":")
@@ -910,7 +915,8 @@ async def _cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
                  topic_store: TopicStore, allowed_user_id: int | None = None,
                  proxy_url: str | None = None,
-                 max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES) -> Application:
+                 max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
+                 allowed_user_ids: set[int] | frozenset[int] | None = None) -> Application:
     """Build the Telegram Application that routes topic replies back to Max."""
     builder = Application.builder().token(token)
     if proxy_url:
@@ -918,7 +924,12 @@ def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
     app = builder.build()
     app.bot_data[MAX_CLIENT_KEY] = max_client
     app.bot_data[TOPIC_STORE_KEY] = topic_store
-    app.bot_data[ALLOWED_USER_KEY] = int(allowed_user_id) if allowed_user_id else None
+    if allowed_user_ids:
+        app.bot_data[ALLOWED_USER_KEY] = frozenset(map(int, allowed_user_ids))
+    elif allowed_user_id:
+        app.bot_data[ALLOWED_USER_KEY] = frozenset({int(allowed_user_id)})
+    else:
+        app.bot_data[ALLOWED_USER_KEY] = None
     app.bot_data[SUPERGROUP_KEY] = int(supergroup_id)
     app.bot_data[MAX_UPLOAD_BYTES_KEY] = max_upload_bytes
 

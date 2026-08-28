@@ -181,7 +181,7 @@ class TestBuildTgApp:
 
         assert app.bot_data[MAX_CLIENT_KEY] is max_client
         assert app.bot_data[TOPIC_STORE_KEY] is topic_store
-        assert app.bot_data[ALLOWED_USER_KEY] == 777
+        assert app.bot_data[ALLOWED_USER_KEY] == frozenset({777})
         assert app.bot_data[MAX_UPLOAD_BYTES_KEY] == 50 * 1024 * 1024
 
     def test_wires_custom_max_upload_bytes(self):
