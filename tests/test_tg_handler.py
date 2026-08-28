@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 from app.tg_handler import (
     ALLOWED_USER_KEY,
+    MAX_UPLOAD_BYTES_KEY,
     MAX_CLIENT_KEY,
     TOPIC_STORE_KEY,
+    _download_tg_file,
     _on_topic_message,
     build_tg_app,
 )
@@ -180,6 +182,18 @@ class TestBuildTgApp:
         assert app.bot_data[MAX_CLIENT_KEY] is max_client
         assert app.bot_data[TOPIC_STORE_KEY] is topic_store
         assert app.bot_data[ALLOWED_USER_KEY] == 777
+        assert app.bot_data[MAX_UPLOAD_BYTES_KEY] == 20 * 1024 * 1024
+
+    def test_wires_custom_max_upload_bytes(self):
+        app = build_tg_app(
+            "123456:AAABBBCCC",
+            MagicMock(),
+            "-100123456",
+            _make_topic_store(),
+            max_upload_bytes=123,
+        )
+
+        assert app.bot_data[MAX_UPLOAD_BYTES_KEY] == 123
 
     def test_allowed_user_id_none_when_unset(self):
         app = build_tg_app("123456:AAABBBCCC", MagicMock(), "-100123456",
@@ -192,3 +206,30 @@ class TestBuildTgApp:
                             _make_topic_store())
 
         assert app.handlers[0]
+
+
+# ---------------------------------------------------------------------------
+# _download_tg_file
+# ---------------------------------------------------------------------------
+
+class TestDownloadTgFile:
+    async def test_refuses_declared_oversized_file(self):
+        file_obj = MagicMock()
+        file_obj.file_size = 101
+        file_obj.get_file = AsyncMock()
+
+        data = await _download_tg_file(file_obj, max_bytes=100)
+
+        assert data is None
+        file_obj.get_file.assert_not_called()
+
+    async def test_refuses_downloaded_oversized_file(self):
+        tg_file = MagicMock()
+        tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"abcdef"))
+        file_obj = MagicMock()
+        file_obj.file_size = None
+        file_obj.get_file = AsyncMock(return_value=tg_file)
+
+        data = await _download_tg_file(file_obj, max_bytes=5)
+
+        assert data is None

@@ -248,8 +248,17 @@ def _human_size(n: int) -> str:
 def create_max_client(
     max_token: str, max_device_id: str, sender: TelegramSender, max_chat_ids: str | None = None,
     debug: bool = False,
+    debug_dump_json: bool = False,
+    max_download_bytes: int = 50 * 1024 * 1024,
 ) -> MaxClient:
-    client = MaxClient(token=max_token, device_id=max_device_id, debug=debug, chat_ids=max_chat_ids)
+    client = MaxClient(
+        token=max_token,
+        device_id=max_device_id,
+        debug=debug,
+        debug_dump_json=debug_dump_json,
+        max_download_bytes=max_download_bytes,
+        chat_ids=max_chat_ids,
+    )
     resolver = ContactResolver(client=client)
     # Expose for tg_handler commands like /profile.
     client.resolver = resolver

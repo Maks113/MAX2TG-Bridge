@@ -184,7 +184,10 @@ sudo journalctl -u max2tg -f
 | `TG_PROXY` | нет | SOCKS5-прокси для Telegram, формат `socks5://[user:pass@]host:port` |
 | `STATE_DIR` | нет | Папка для `topics.json` (по умолчанию `state`) |
 | `REPLY_ENABLED` | нет | `true` — включить ответы из топиков в MAX |
-| `DEBUG` | нет | `true` — verbose-логи + dump JSON в `debug/` |
+| `DEBUG` | нет | `true` — verbose-логи |
+| `DEBUG_DUMP_JSON` | нет | `true` — сохранять redacted JSON в `debug/`; может содержать текст сообщений |
+| `MAX_DOWNLOAD_MB` | нет | Максимальный размер вложения из MAX для скачивания в память, по умолчанию `50` |
+| `TG_UPLOAD_MB` | нет | Максимальный размер файла из Telegram для отправки в MAX, по умолчанию `20` |
 
 ---
 

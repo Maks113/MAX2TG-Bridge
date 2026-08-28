@@ -51,6 +51,9 @@ class TestSettingsDataclass:
         assert s.debug is False
         assert s.reply_enabled is False
         assert s.max_chat_ids is None
+        assert s.debug_dump_json is False
+        assert s.max_download_mb == 50
+        assert s.tg_upload_mb == 20
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,25 @@ class TestLoadSettingsValid:
     def test_max_chat_ids_none_when_empty_string(self):
         s = _load_settings_with_env(_env(MAX_CHAT_IDS=""))
         assert s.max_chat_ids is None
+
+    def test_debug_dump_json_true_via_true(self):
+        s = _load_settings_with_env(_env(DEBUG_DUMP_JSON="true"))
+        assert s.debug_dump_json is True
+
+    def test_media_limits_can_be_configured(self):
+        s = _load_settings_with_env(_env(MAX_DOWNLOAD_MB="50", TG_UPLOAD_MB="10"))
+        assert s.max_download_mb == 50
+        assert s.tg_upload_mb == 10
+
+    def test_media_limits_reject_non_integer(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_DOWNLOAD_MB="large"))
+        assert "MAX_DOWNLOAD_MB" in str(exc.value)
+
+    def test_media_limits_reject_zero(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(TG_UPLOAD_MB="0"))
+        assert "TG_UPLOAD_MB" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------

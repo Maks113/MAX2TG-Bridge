@@ -1,7 +1,15 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
 import pytest
-from app.max_client import MaxClient, MaxMessage, OpCode
+from app.max_client import (
+    DEFAULT_MAX_DOWNLOAD_BYTES,
+    MaxClient,
+    MaxMessage,
+    OpCode,
+    _is_allowed_download_url,
+    _redact_sensitive,
+    _redact_url,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +283,58 @@ class TestMaxClientInit:
 
         result = c.on_disconnect(my_handler)
         assert result is my_handler
+
+    def test_debug_dump_json_default_false(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c.debug_dump_json is False
+
+    def test_max_download_bytes_default(self):
+        c = MaxClient(token="tok", device_id="dev")
+        assert c.max_download_bytes == DEFAULT_MAX_DOWNLOAD_BYTES
+
+    def test_chat_ids_are_instance_local(self):
+        filtered = MaxClient(token="tok", device_id="dev", chat_ids="1,2")
+        unfiltered = MaxClient(token="tok", device_id="dev")
+
+        assert filtered.chat_ids == [1, 2]
+        assert unfiltered.chat_ids == []
+
+
+# ---------------------------------------------------------------------------
+# Safety helpers
+# ---------------------------------------------------------------------------
+
+class TestSafetyHelpers:
+    def test_redacts_sensitive_dict_keys(self):
+        data = {
+            "token": "secret-token",
+            "deviceId": "device",
+            "nested": {"phone": "+79990000000", "text": "keep"},
+        }
+
+        redacted = _redact_sensitive(data)
+
+        assert redacted["token"] == "<redacted>"
+        assert redacted["deviceId"] == "<redacted>"
+        assert redacted["nested"]["phone"] == "<redacted>"
+        assert redacted["nested"]["text"] == "keep"
+
+    def test_redacts_sensitive_url_query_values(self):
+        assert _redact_url("https://i.oneme.ru/i?r=abc&token=secret") == (
+            "https://i.oneme.ru/i?r=abc&token=%3Credacted%3E"
+        )
+
+    def test_redacts_max_invite_path_tokens(self):
+        assert _redact_url("https://max.ru/join/abc123") == (
+            "https://max.ru/join/<redacted>"
+        )
+
+    def test_allows_expected_max_cdn_hosts(self):
+        assert _is_allowed_download_url("https://i.oneme.ru/i?r=abc")
+        assert _is_allowed_download_url("https://cdn.oneme.ru/file")
+        assert _is_allowed_download_url("https://web.max.ru/image")
+
+    def test_blocks_non_https_and_external_hosts(self):
+        assert not _is_allowed_download_url("http://i.oneme.ru/i?r=abc")
+        assert not _is_allowed_download_url("https://example.com/file")
+        assert not _is_allowed_download_url("https://oneme.ru.evil.test/file")

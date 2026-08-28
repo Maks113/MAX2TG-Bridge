@@ -67,6 +67,8 @@ async def main():
     logging.getLogger("telegram").setLevel(logging.WARNING if not settings.debug else logging.DEBUG)
 
     log.info("Debug mode: %s", "ON" if settings.debug else "OFF")
+    if settings.debug_dump_json:
+        log.warning("DEBUG_DUMP_JSON is enabled; debug dumps are redacted but may still contain message text.")
 
     if settings.tg_proxy:
         log.info("Using Telegram proxy: %s", settings.tg_proxy.split("@")[-1])
@@ -81,13 +83,16 @@ async def main():
     client = create_max_client(
         settings.max_token, settings.max_device_id, sender, settings.max_chat_ids,
         debug=settings.debug,
+        debug_dump_json=settings.debug_dump_json,
+        max_download_bytes=settings.max_download_mb * 1024 * 1024,
     )
 
     tg_app = None
     if settings.reply_enabled:
         tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_id,
                               topic_store, allowed_user_id=settings.tg_allowed_user_id,
-                              proxy_url=settings.tg_proxy)
+                              proxy_url=settings.tg_proxy,
+                              max_upload_bytes=settings.tg_upload_mb * 1024 * 1024)
         await tg_app.initialize()
         await tg_app.start()
         await tg_app.updater.start_polling(

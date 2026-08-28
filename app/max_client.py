@@ -7,12 +7,31 @@ import time
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 
 log = logging.getLogger(__name__)
 
 DEBUG_DIR = "debug"
+DEFAULT_MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024
+ALLOWED_DOWNLOAD_HOSTS = frozenset({
+    "i.oneme.ru",
+    "oneme.ru",
+    "web.max.ru",
+    "max.ru",
+})
+ALLOWED_DOWNLOAD_SUFFIXES = (".oneme.ru", ".max.ru")
+SENSITIVE_KEY_PARTS = (
+    "token",
+    "auth",
+    "authorization",
+    "cookie",
+    "secret",
+    "password",
+    "phone",
+    "deviceid",
+)
 
 
 def _log_task_exception(task: "asyncio.Task") -> None:
@@ -95,12 +114,21 @@ class MaxClient:
     WS_URL = "wss://ws-api.oneme.ru/websocket"
     HEARTBEAT_SEC = 30
     RECONNECT_SEC = 5
-    chat_ids = []
 
-    def __init__(self, token: str, device_id: str, chat_ids: str | None = None, debug: bool = False):
+    def __init__(
+        self,
+        token: str,
+        device_id: str,
+        chat_ids: str | None = None,
+        debug: bool = False,
+        debug_dump_json: bool = False,
+        max_download_bytes: int = DEFAULT_MAX_DOWNLOAD_BYTES,
+    ):
         self.token = token
         self.device_id = device_id
         self.debug = debug
+        self.debug_dump_json = debug_dump_json
+        self.max_download_bytes = max_download_bytes
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._seq = 0
         self._my_id = None
@@ -112,6 +140,7 @@ class MaxClient:
         self._pending: dict[int, asyncio.Future] = {}
         self._file_pending: dict[int, asyncio.Future] = {}
         self._on_disconnect_cb = None
+        self.chat_ids: list[int] = []
         if chat_ids:
             self.chat_ids += map(int, map(str.strip, chat_ids.split(',')))
 
@@ -144,7 +173,9 @@ class MaxClient:
         }
         self._seq += 1
         raw = json.dumps(pkt, ensure_ascii=False)
-        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, raw[:800])
+        safe_pkt = _redact_sensitive(pkt)
+        safe_raw = json.dumps(safe_pkt, ensure_ascii=False)
+        log.debug(">>> SEND op=%d seq=%d | %s", opcode, seq, safe_raw[:800])
         await self._ws.send_str(raw)
         return seq
 
@@ -177,7 +208,7 @@ class MaxClient:
     # ── main loop ──────────────────────────────────────────────────
 
     async def run(self):
-        if self.debug:
+        if self.debug_dump_json:
             os.makedirs(DEBUG_DIR, exist_ok=True)
 
         async with aiohttp.ClientSession(headers=_BROWSER_HEADERS) as session:
@@ -282,7 +313,7 @@ class MaxClient:
             elif op == OpCode.AUTH_SNAPSHOT and cmd == 1:
                 self._my_id = payload.get("profile", {}).get("id")
                 log.info("Authorized! my_id=%s", self._my_id)
-                if self.debug:
+                if self.debug_dump_json:
                     self._dump_json("snapshot.json", payload)
 
                 if self._on_ready_cb:
@@ -290,7 +321,7 @@ class MaxClient:
 
             elif op == OpCode.DISPATCH:
                 self._dispatch_counter += 1
-                if self.debug and self._dispatch_counter <= 20:
+                if self.debug_dump_json and self._dispatch_counter <= 20:
                     self._dump_json(
                         f"dispatch_{self._dispatch_counter:04d}.json", payload
                     )
@@ -323,7 +354,7 @@ class MaxClient:
         if not contact_ids:
             return {}
         resp = await self.cmd(OpCode.CONTACT_GET, {"contactIds": contact_ids})
-        if self.debug:
+        if self.debug_dump_json:
             self._dump_json("contacts_response.json", resp)
         log.info("fetch_contacts(%s) → keys: %s", contact_ids, list(resp.keys()))
         return resp
@@ -409,7 +440,7 @@ class MaxClient:
         """
         resp = await self.cmd(57, {"link": link})
         log.info("open_by_link(%s) → %s",
-                 link[:60], str(resp)[:300] if resp else resp)
+                 _redact_url(link)[:60], str(_redact_sensitive(resp))[:300] if resp else resp)
         return resp
 
     async def download_audio_url(self, audio_id, chat_id, message_id,
@@ -439,7 +470,7 @@ class MaxClient:
         for url in candidates:
             ok = await self._probe_audio_url(url)
             if ok:
-                log.info("download_audio_url: found audio at %s", url[:80])
+                log.info("download_audio_url: found audio at %s", _redact_url(url)[:80])
                 return url
 
         # Last cheap try: maybe the audio is stored in the same backend as
@@ -479,7 +510,7 @@ class MaxClient:
             ) as resp:
                 ct = resp.headers.get("Content-Type", "")
                 log.info("probe %s → HTTP %d, Content-Type=%s",
-                          url[:80], resp.status, ct)
+                          _redact_url(url)[:80], resp.status, ct)
                 if resp.status != 200:
                     return False
                 # Reject obviously-HTML responses (error/redirect pages).
@@ -487,7 +518,7 @@ class MaxClient:
                     return False
                 return True
         except Exception:
-            log.exception("probe error for %s", url[:80])
+            log.exception("probe error for %s", _redact_url(url)[:80])
             return False
         finally:
             if close_after:
@@ -595,7 +626,7 @@ class MaxClient:
                 await resp.read()
                 return True
         except Exception:
-            log.exception("Upload POST error: %s", url[:120])
+            log.exception("Upload POST error: %s", _redact_url(url)[:120])
             return None
         finally:
             if close_after:
@@ -603,6 +634,9 @@ class MaxClient:
 
     async def download_file(self, url: str) -> bytes | None:
         """Download a file by URL, returning raw bytes or None on failure."""
+        if not _is_allowed_download_url(url):
+            log.warning("Blocked download from disallowed URL: %s", _redact_url(url)[:120])
+            return None
         session = getattr(self, "_session", None)
         close_after = False
         if session is None or session.closed:
@@ -614,12 +648,39 @@ class MaxClient:
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status == 200:
-                    data = await resp.read()
-                    log.info("Downloaded %s (%d bytes)", url[:120], len(data))
+                    content_length = resp.headers.get("Content-Length")
+                    try:
+                        declared_size = int(content_length) if content_length else None
+                    except ValueError:
+                        declared_size = None
+                    if declared_size is not None and declared_size > self.max_download_bytes:
+                        log.warning(
+                            "Blocked oversized download %s: %s bytes > %s bytes",
+                            _redact_url(url)[:120],
+                            declared_size,
+                            self.max_download_bytes,
+                        )
+                        return None
+
+                    chunks: list[bytes] = []
+                    total = 0
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        total += len(chunk)
+                        if total > self.max_download_bytes:
+                            log.warning(
+                                "Blocked oversized streaming download %s: %d bytes > %d bytes",
+                                _redact_url(url)[:120],
+                                total,
+                                self.max_download_bytes,
+                            )
+                            return None
+                        chunks.append(chunk)
+                    data = b"".join(chunks)
+                    log.info("Downloaded %s (%d bytes)", _redact_url(url)[:120], len(data))
                     return data
-                log.warning("Download failed %s — HTTP %d", url[:120], resp.status)
+                log.warning("Download failed %s — HTTP %d", _redact_url(url)[:120], resp.status)
         except Exception:
-            log.exception("Download error: %s", url[:120])
+            log.exception("Download error: %s", _redact_url(url)[:120])
         finally:
             if close_after:
                 await session.close()
@@ -655,7 +716,58 @@ class MaxClient:
         path = os.path.join(DEBUG_DIR, filename)
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                json.dump(_redact_sensitive(data), f, ensure_ascii=False, indent=2)
             log.info("Dumped %s (%d bytes)", path, os.path.getsize(path))
         except Exception:
             log.exception("Failed to dump %s", path)
+
+
+def _is_allowed_download_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return False
+    if parsed.scheme != "https":
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return host in ALLOWED_DOWNLOAD_HOSTS or host.endswith(ALLOWED_DOWNLOAD_SUFFIXES)
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return "<invalid-url>"
+    path = parsed.path
+    host = (parsed.hostname or "").lower().rstrip(".")
+    parts = path.strip("/").split("/")
+    if host.endswith("max.ru") and parts and parts[0] in {"join", "u"}:
+        path = "/" + parts[0] + "/<redacted>"
+    query = []
+    for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+        if _is_sensitive_key(key):
+            query.append((key, "<redacted>"))
+        else:
+            query.append((key, value))
+    return urlunsplit((parsed.scheme, parsed.netloc, path, urlencode(query), parsed.fragment))
+
+
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.replace("_", "").replace("-", "").lower()
+    return any(part in normalized for part in SENSITIVE_KEY_PARTS)
+
+
+def _redact_sensitive(value):
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if _is_sensitive_key(str(key)):
+                redacted[key] = "<redacted>"
+            elif isinstance(item, str) and item.startswith(("http://", "https://")):
+                redacted[key] = _redact_url(item)
+            else:
+                redacted[key] = _redact_sensitive(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value

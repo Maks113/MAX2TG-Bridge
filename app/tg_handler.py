@@ -24,6 +24,8 @@ MAX_CLIENT_KEY = "max_client"
 TOPIC_STORE_KEY = "topic_store"
 ALLOWED_USER_KEY = "allowed_user_id"
 SUPERGROUP_KEY = "supergroup_id"
+MAX_UPLOAD_BYTES_KEY = "max_upload_bytes"
+DEFAULT_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 _MAX_URL_RE = re.compile(r"https?://(?:web\.)?max\.ru/(-?\d+)")
 
@@ -171,11 +173,19 @@ async def _on_topic_message(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await _surface_send_result(message, resp)
 
 
-async def _download_tg_file(file_obj) -> bytes | None:
+async def _download_tg_file(file_obj, max_bytes: int = DEFAULT_MAX_UPLOAD_BYTES) -> bytes | None:
     """Pull bytes from a Telegram File object via the Bot API."""
+    file_size = getattr(file_obj, "file_size", None)
+    if file_size is not None and file_size > max_bytes:
+        log.warning("Telegram file is too large: %s bytes > %s bytes", file_size, max_bytes)
+        return None
     try:
         tg_file = await file_obj.get_file()
-        return bytes(await tg_file.download_as_bytearray())
+        data = bytes(await tg_file.download_as_bytearray())
+        if len(data) > max_bytes:
+            log.warning("Downloaded Telegram file is too large: %s bytes > %s bytes", len(data), max_bytes)
+            return None
+        return data
     except Exception:
         log.exception("Failed to download Telegram file")
         return None
@@ -195,6 +205,7 @@ async def _on_topic_media(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     caption = message.caption or ""
+    max_upload_bytes = context.bot_data.get(MAX_UPLOAD_BYTES_KEY, DEFAULT_MAX_UPLOAD_BYTES)
 
     # ── pick the right uploader for the attached media ────────────
     attach = None
@@ -202,16 +213,16 @@ async def _on_topic_media(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # message.photo is a list of progressively larger PhotoSize objects;
         # the last one is the highest resolution.
         photo = message.photo[-1]
-        data = await _download_tg_file(photo)
+        data = await _download_tg_file(photo, max_upload_bytes)
         if data is None:
-            await message.reply_text("⚠️ Не удалось скачать фото из Telegram.")
+            await message.reply_text("⚠️ Не удалось скачать фото из Telegram или файл слишком большой.")
             return
         attach = await max_client.upload_photo(data, chat_id=max_chat_id)
 
     elif message.voice:
-        data = await _download_tg_file(message.voice)
+        data = await _download_tg_file(message.voice, max_upload_bytes)
         if data is None:
-            await message.reply_text("⚠️ Не удалось скачать голосовое из Telegram.")
+            await message.reply_text("⚠️ Не удалось скачать голосовое из Telegram или файл слишком большой.")
             return
         attach = await max_client.upload_audio(
             data, chat_id=max_chat_id,
@@ -220,9 +231,9 @@ async def _on_topic_media(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif message.audio:
-        data = await _download_tg_file(message.audio)
+        data = await _download_tg_file(message.audio, max_upload_bytes)
         if data is None:
-            await message.reply_text("⚠️ Не удалось скачать аудио из Telegram.")
+            await message.reply_text("⚠️ Не удалось скачать аудио из Telegram или файл слишком большой.")
             return
         attach = await max_client.upload_file(
             data, chat_id=max_chat_id,
@@ -231,9 +242,9 @@ async def _on_topic_media(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif message.document:
-        data = await _download_tg_file(message.document)
+        data = await _download_tg_file(message.document, max_upload_bytes)
         if data is None:
-            await message.reply_text("⚠️ Не удалось скачать файл из Telegram.")
+            await message.reply_text("⚠️ Не удалось скачать файл из Telegram или файл слишком большой.")
             return
         attach = await max_client.upload_file(
             data, chat_id=max_chat_id,
@@ -242,9 +253,9 @@ async def _on_topic_media(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
     elif message.video:
-        data = await _download_tg_file(message.video)
+        data = await _download_tg_file(message.video, max_upload_bytes)
         if data is None:
-            await message.reply_text("⚠️ Не удалось скачать видео из Telegram.")
+            await message.reply_text("⚠️ Не удалось скачать видео из Telegram или файл слишком большой.")
             return
         attach = await max_client.upload_file(
             data, chat_id=max_chat_id,
@@ -898,7 +909,8 @@ async def _cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
                  topic_store: TopicStore, allowed_user_id: int | None = None,
-                 proxy_url: str | None = None) -> Application:
+                 proxy_url: str | None = None,
+                 max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES) -> Application:
     """Build the Telegram Application that routes topic replies back to Max."""
     builder = Application.builder().token(token)
     if proxy_url:
@@ -908,6 +920,7 @@ def build_tg_app(token: str, max_client: MaxClient, supergroup_id: str,
     app.bot_data[TOPIC_STORE_KEY] = topic_store
     app.bot_data[ALLOWED_USER_KEY] = int(allowed_user_id) if allowed_user_id else None
     app.bot_data[SUPERGROUP_KEY] = int(supergroup_id)
+    app.bot_data[MAX_UPLOAD_BYTES_KEY] = max_upload_bytes
 
     chat_filter = filters.Chat(chat_id=int(supergroup_id))
     app.add_handler(CommandHandler("bind", _cmd_bind, filters=chat_filter))
