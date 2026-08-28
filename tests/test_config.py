@@ -132,6 +132,14 @@ class TestLoadSettingsValid:
         s = _load_settings_with_env(_env(MAX_CHAT_IDS=""))
         assert s.max_chat_ids is None
 
+    def test_allowed_user_ids_from_plural_list(self):
+        s = _load_settings_with_env(_env(TG_ALLOWED_USER_IDS="100, 200"))
+        assert s.tg_allowed_user_ids == frozenset({100, 200})
+
+    def test_allowed_user_ids_supports_legacy_singular(self):
+        s = _load_settings_with_env(_env(TG_ALLOWED_USER_ID="100"))
+        assert s.tg_allowed_user_ids == frozenset({100})
+
     def test_debug_dump_json_true_via_true(self):
         s = _load_settings_with_env(_env(DEBUG_DUMP_JSON="true"))
         assert s.debug_dump_json is True

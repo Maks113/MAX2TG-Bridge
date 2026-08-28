@@ -90,7 +90,7 @@ async def main():
     tg_app = None
     if settings.reply_enabled:
         tg_app = build_tg_app(settings.tg_bot_token, client, settings.tg_chat_id,
-                              topic_store, allowed_user_id=settings.tg_allowed_user_id,
+                              topic_store, allowed_user_ids=settings.tg_allowed_user_ids,
                               proxy_url=settings.tg_proxy,
                               max_upload_bytes=settings.tg_upload_mb * 1024 * 1024)
         await tg_app.initialize()
