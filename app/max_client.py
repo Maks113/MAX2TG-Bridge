@@ -93,6 +93,7 @@ class OpCode(IntEnum):
     PHOTO_UPLOAD_URL = 80     # get URL for photo upload
     AUDIO_UPLOAD_URL = 86     # get URL for voice/audio upload (experimental)
     FILE_UPLOAD_URL = 87      # get URL for file upload
+    FILE_DOWNLOAD_URL = 88    # resolve incoming fileId to a download URL
     DISPATCH = 128
     UPLOAD_READY = 136        # server says an uploaded file/video is processed
 

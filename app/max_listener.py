@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from html import escape
 
-from app.max_client import MaxClient, MaxMessage
+from app.max_client import MaxClient, MaxMessage, OpCode
 from app.resolver import ContactResolver
 from app.tg_sender import TelegramSender
 
@@ -111,6 +111,28 @@ async def _send_attach(
         name = attach.get("name", "file")
         size = attach.get("size", 0)
         token_url = _extract_file_url(attach)
+        file_id = attach.get("fileId")
+        chat_id = msg.chat_id if msg else None
+        message_id = msg.message_id if msg else None
+        if (not token_url and file_id is not None
+                and chat_id is not None and message_id):
+            log.info(
+                "Resolving FILE URL chatId=%s fileId=%s messageId=%s",
+                chat_id, file_id, message_id,
+            )
+            resp = await client.cmd(
+                OpCode.FILE_DOWNLOAD_URL,
+                {
+                    "chatId": chat_id,
+                    "fileId": file_id,
+                    "messageId": message_id,
+                },
+            )
+            if isinstance(resp, dict):
+                resolved_url = resp.get("url")
+                if isinstance(resolved_url, str) and resolved_url.startswith("http"):
+                    token_url = resolved_url
+                    log.info("Resolved FILE URL for fileId=%s", file_id)
         if token_url:
             data = await client.download_file(token_url)
             if data:
@@ -122,6 +144,7 @@ async def _send_attach(
                 else:
                     await sender.send_document(data, caption=header_text, filename=name, message_thread_id=thread_id)
                 return True
+        log.warning("FILE content unavailable; sending metadata only: fileId=%s name=%r", file_id, name)
         size_str = f" ({_human_size(size)})" if size else ""
         await sender.send(f"{header_text}\n📎 <b>{escape(name)}</b>{size_str}", message_thread_id=thread_id)
         return True
@@ -376,7 +399,7 @@ def create_max_client(
                 else:
                     cap = header_text
                 await _send_attach(attach, client, sender, cap, thread_id=thread_id, msg=msg)
-                log.info("Forwarded attach _type=%s → TG", attach.get("_type"))
+                log.info("Processed attach _type=%s", attach.get("_type"))
 
             if msg.text and not text_sent:
                 await sender.send(f"{header_text}\n{escape(msg.text)}", message_thread_id=thread_id)

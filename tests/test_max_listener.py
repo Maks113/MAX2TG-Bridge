@@ -1,7 +1,10 @@
 """Tests for app/max_listener.py — pure helper functions."""
 
 import pytest
-from app.max_listener import _human_size, _guess_media_kind
+from unittest.mock import AsyncMock, MagicMock
+
+from app.max_client import MaxMessage, OpCode
+from app.max_listener import _human_size, _guess_media_kind, _send_attach
 
 
 # ---------------------------------------------------------------------------
@@ -144,3 +147,48 @@ class TestGuessMediaKind:
     # Extension appearing in the middle of filename should not trigger false match
     def test_mp4_in_name_not_extension_is_document(self):
         assert _guess_media_kind("mp4_notes.txt") == "document"
+
+
+class TestFileAttachment:
+    @pytest.mark.asyncio
+    async def test_resolves_file_id_and_sends_document(self):
+        client = MagicMock()
+        client.cmd = AsyncMock(return_value={"url": "https://i.oneme.ru/file.bin"})
+        client.download_file = AsyncMock(return_value=b"file contents")
+        sender = MagicMock()
+        sender.send_document = AsyncMock()
+        sender.send = AsyncMock()
+        msg = MaxMessage(chat_id=-78273486848085, message_id="message-1")
+
+        handled = await _send_attach(
+            {
+                "_type": "FILE",
+                "name": "report.pdf",
+                "size": 13,
+                "fileId": 12345,
+                "token": "secret-token",
+            },
+            client,
+            sender,
+            "header",
+            thread_id=42,
+            msg=msg,
+        )
+
+        assert handled is True
+        client.cmd.assert_awaited_once_with(
+            OpCode.FILE_DOWNLOAD_URL,
+            {
+                "chatId": -78273486848085,
+                "fileId": 12345,
+                "messageId": "message-1",
+            },
+        )
+        client.download_file.assert_awaited_once_with("https://i.oneme.ru/file.bin")
+        sender.send_document.assert_awaited_once_with(
+            b"file contents",
+            caption="header",
+            filename="report.pdf",
+            message_thread_id=42,
+        )
+        sender.send.assert_not_awaited()
