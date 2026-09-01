@@ -1,4 +1,5 @@
 aiohttp==3.14.3
+maxapi-python==2.4.1
 python-telegram-bot==22.8
 python-dotenv==1.2.3
 httpx[socks]==0.28.1

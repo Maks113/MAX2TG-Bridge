@@ -1,15 +1,21 @@
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 from dotenv import load_dotenv
+
+PyMaxAuthMode = Literal["sms", "qr"]
 
 
 @dataclass(frozen=True)
 class Settings:
-    max_token: str
-    max_device_id: str
     tg_bot_token: str
     tg_chat_id: str
+    max_pymax_auth: PyMaxAuthMode = "qr"
+    max_phone: str | None = None
+    max_pymax_work_dir: str = "state/pymax"
+    max_pymax_session_name: str = "pymax-sms.db"
+    max_2fa_password: str | None = None
     max_chat_ids: str | None = None
     tg_proxy: str | None = None
     debug: bool = False
@@ -21,10 +27,24 @@ class Settings:
     tg_upload_mb: int = 50
 
 
+def _normalized_choice(name: str, default: str, allowed: set[str]) -> str:
+    raw = os.environ.get(name)
+    value = (raw or default).strip().lower()
+    if value not in allowed:
+        expected = ", ".join(sorted(allowed))
+        raise SystemExit(f"{name} must be one of: {expected}; got: {raw!r}")
+    return value
+
+
 def load_settings() -> Settings:
     load_dotenv()
 
-    required = ["MAX_TOKEN", "MAX_DEVICE_ID", "TG_BOT_TOKEN", "TG_CHAT_ID"]
+    max_pymax_auth = _normalized_choice("MAX_PYMAX_AUTH", "qr", {"sms", "qr"})
+
+    required = ["TG_BOT_TOKEN", "TG_CHAT_ID"]
+    if max_pymax_auth == "sms":
+        required += ["MAX_PHONE"]
+
     missing = [k for k in required if not os.environ.get(k)]
     if missing:
         raise SystemExit(
@@ -68,16 +88,29 @@ def load_settings() -> Settings:
             raise SystemExit(f"{name} must be greater than zero, got: {value!r}")
         return value
 
+    state_dir = os.environ.get("STATE_DIR") or "state"
+    max_pymax_work_dir = (
+        os.environ.get("MAX_PYMAX_WORK_DIR")
+        or os.path.join(state_dir, "pymax")
+    )
+    max_pymax_session_name = (
+        os.environ.get("MAX_PYMAX_SESSION_NAME")
+        or f"pymax-{max_pymax_auth}.db"
+    )
+
     return Settings(
-        max_token=os.environ["MAX_TOKEN"],
-        max_device_id=os.environ["MAX_DEVICE_ID"],
         tg_bot_token=os.environ["TG_BOT_TOKEN"],
         tg_chat_id=tg_chat_id,
+        max_pymax_auth=max_pymax_auth,  # type: ignore[arg-type]
+        max_phone=os.environ.get("MAX_PHONE") or None,
+        max_pymax_work_dir=max_pymax_work_dir,
+        max_pymax_session_name=max_pymax_session_name,
+        max_2fa_password=os.environ.get("MAX_2FA_PASSWORD") or None,
         max_chat_ids=os.environ.get("MAX_CHAT_IDS") or None,
         tg_proxy=os.environ.get("TG_PROXY") or None,
         debug=os.environ.get("DEBUG", "").lower() in ("1", "true", "yes"),
         reply_enabled=os.environ.get("REPLY_ENABLED", "").lower() in ("1", "true", "yes"),
-        state_dir=os.environ.get("STATE_DIR") or "state",
+        state_dir=state_dir,
         tg_allowed_user_ids=allowed_user_ids,
         debug_dump_json=os.environ.get("DEBUG_DUMP_JSON", "").lower() in ("1", "true", "yes"),
         max_download_mb=_int_env("MAX_DOWNLOAD_MB", 50),

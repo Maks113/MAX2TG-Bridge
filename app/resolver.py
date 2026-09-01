@@ -6,13 +6,13 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from app.max_client import MaxClient
+    from app.pymax_client import PyMaxClient
 
 log = logging.getLogger(__name__)
 
 
 class ContactResolver:
-    def __init__(self, client: MaxClient | None = None):
+    def __init__(self, client: PyMaxClient | None = None):
         self.chats: dict[Any, str] = {}
         self.chat_types: dict[Any, str] = {}
         self.chats_raw: dict[Any, dict] = {}      # full chat snapshot per id
@@ -62,8 +62,8 @@ class ContactResolver:
         names = profile.get("names", [])
         if names and self._my_id:
             n = names[0]
-            first = n.get("firstName", "")
-            last = n.get("lastName", "")
+            first = n.get("firstName") or ""
+            last = n.get("lastName") or ""
             self.users[self._my_id] = f"{first} {last}".strip() or n.get("name", "")
 
         all_participant_ids: set[int] = set()
@@ -175,8 +175,8 @@ class ContactResolver:
         names_list = c.get("names")
         if isinstance(names_list, list) and names_list:
             n = names_list[0]
-            first = n.get("firstName", "")
-            last = n.get("lastName", "")
+            first = n.get("firstName") or ""
+            last = n.get("lastName") or ""
             if first or last:
                 return f"{first} {last}".strip()
             if n.get("name"):

@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+from telegram.error import TimedOut
+
 from app.tg_handler import (
     ALLOWED_USER_KEY,
     MAX_UPLOAD_BYTES_KEY,
@@ -9,6 +11,7 @@ from app.tg_handler import (
     TOPIC_STORE_KEY,
     _download_tg_file,
     _on_topic_message,
+    _send_topic_media_messages,
     build_tg_app,
 )
 
@@ -208,6 +211,36 @@ class TestBuildTgApp:
         assert app.handlers[0]
 
 
+class TestMediaGrouping:
+    async def test_sends_album_as_one_max_message(self, monkeypatch):
+        first = MagicMock()
+        first.caption = "Album caption"
+        first.caption_entities = []
+        first.reply_text = AsyncMock()
+        first.set_reaction = AsyncMock()
+        second = MagicMock()
+        second.caption = None
+        second.caption_entities = []
+        second.reply_text = AsyncMock()
+        second.set_reaction = AsyncMock()
+        uploader = AsyncMock(side_effect=["attach-1", "attach-2"])
+        monkeypatch.setattr("app.tg_handler._upload_topic_attachment", uploader)
+        max_client = MagicMock()
+        max_client.send_message = AsyncMock(return_value={"ok": True})
+
+        await _send_topic_media_messages(
+            [first, second], 42, max_client, 1024
+        )
+
+        max_client.send_message.assert_awaited_once_with(
+            42,
+            text="Album caption",
+            elements=[],
+            attaches=["attach-1", "attach-2"],
+        )
+        first.set_reaction.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # _download_tg_file
 # ---------------------------------------------------------------------------
@@ -233,3 +266,16 @@ class TestDownloadTgFile:
         data = await _download_tg_file(file_obj, max_bytes=5)
 
         assert data is None
+
+    async def test_retries_telegram_timeout(self, monkeypatch):
+        tg_file = MagicMock()
+        tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(b"ok"))
+        file_obj = MagicMock()
+        file_obj.file_size = 2
+        file_obj.get_file = AsyncMock(side_effect=[TimedOut(), tg_file])
+        monkeypatch.setattr("app.tg_handler.asyncio.sleep", AsyncMock())
+
+        data = await _download_tg_file(file_obj, max_bytes=10)
+
+        assert data == b"ok"
+        assert file_obj.get_file.await_count == 2
