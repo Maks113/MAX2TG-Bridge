@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
+from yarl import URL
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ ALLOWED_DOWNLOAD_HOSTS = frozenset({
     "web.max.ru",
     "max.ru",
 })
-ALLOWED_DOWNLOAD_SUFFIXES = (".oneme.ru", ".max.ru")
+ALLOWED_DOWNLOAD_SUFFIXES = (".oneme.ru", ".max.ru", ".okcdn.ru")
 SENSITIVE_KEY_PARTS = (
     "token",
     "auth",
@@ -91,6 +92,7 @@ class OpCode(IntEnum):
     ATTACH_TYPING = 65        # "I'm uploading <type> in this chat"
     EDIT_MESSAGE = 67
     PHOTO_UPLOAD_URL = 80     # get URL for photo upload
+    VIDEO_DOWNLOAD_URL = 83   # resolve incoming videoId to CDN URLs
     AUDIO_UPLOAD_URL = 86     # get URL for voice/audio upload (experimental)
     FILE_UPLOAD_URL = 87      # get URL for file upload
     FILE_DOWNLOAD_URL = 88    # resolve incoming fileId to a download URL
@@ -497,6 +499,40 @@ class MaxClient:
         log.warning("download_audio_url: nothing resolved an audio URL")
         return None
 
+    async def download_video_url(
+        self, video_id, chat_id, message_id,
+    ) -> str | None:
+        """Resolve an incoming MAX video ID to the best available MP4 URL."""
+        try:
+            numeric_video_id = int(video_id)
+        except (TypeError, ValueError):
+            log.warning("Invalid videoId: %r", video_id)
+            return None
+
+        resp = await self.cmd(
+            OpCode.VIDEO_DOWNLOAD_URL,
+            {
+                "videoId": numeric_video_id,
+                "chatId": chat_id,
+                "messageId": message_id,
+            },
+        )
+        if not isinstance(resp, dict) or "_max_error" in resp:
+            log.warning("Could not resolve VIDEO URL for videoId=%s", numeric_video_id)
+            return None
+
+        preferred_qualities = (
+            "MP4_1080", "MP4_720", "MP4_480", "MP4_360", "MP4_240", "MP4_144",
+        )
+        for quality in preferred_qualities:
+            url = resp.get(quality)
+            if isinstance(url, str) and _is_allowed_download_url(url):
+                log.info("Resolved VIDEO URL videoId=%s quality=%s", numeric_video_id, quality)
+                return url
+
+        log.warning("VIDEO response has no allowed MP4 URL for videoId=%s", numeric_video_id)
+        return None
+
     async def _probe_audio_url(self, url: str) -> bool:
         """HEAD-probe a candidate URL — accept if HTTP 200 with non-HTML body."""
         session = getattr(self, "_session", None)
@@ -638,14 +674,27 @@ class MaxClient:
         if not _is_allowed_download_url(url):
             log.warning("Blocked download from disallowed URL: %s", _redact_url(url)[:120])
             return None
-        session = getattr(self, "_session", None)
-        close_after = False
+
+        host = (urlsplit(url).hostname or "").lower().rstrip(".")
+        is_okcdn = host == "okcdn.ru" or host.endswith(".okcdn.ru")
+        if is_okcdn:
+            # Signed OK CDN URLs are sensitive to browser-origin headers.
+            # MAX's web client/reference downloader uses only User-Agent here.
+            session = aiohttp.ClientSession(headers={"User-Agent": _USER_AGENT})
+            request_headers = {}
+            request_url = URL(url, encoded=True)
+            close_after = True
+        else:
+            session = getattr(self, "_session", None)
+            request_headers = _HTTP_HEADERS
+            request_url = url
+            close_after = False
         if session is None or session.closed:
             session = aiohttp.ClientSession(headers=_BROWSER_HEADERS)
             close_after = True
         try:
             async with session.get(
-                url, headers=_HTTP_HEADERS,
+                request_url, headers=request_headers,
                 timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status == 200:
@@ -679,7 +728,11 @@ class MaxClient:
                     data = b"".join(chunks)
                     log.info("Downloaded %s (%d bytes)", _redact_url(url)[:120], len(data))
                     return data
-                log.warning("Download failed %s — HTTP %d", _redact_url(url)[:120], resp.status)
+                error_body = (await resp.text(errors="replace"))[:200]
+                log.warning(
+                    "Download failed %s — HTTP %d: %r",
+                    _redact_url(url)[:120], resp.status, error_body,
+                )
         except Exception:
             log.exception("Download error: %s", _redact_url(url)[:120])
         finally:

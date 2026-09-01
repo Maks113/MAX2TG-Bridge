@@ -1,6 +1,8 @@
 """Tests for app/max_client.py — OpCode enum and _parse_message."""
 
 import pytest
+from unittest.mock import AsyncMock
+
 from app.max_client import (
     DEFAULT_MAX_DOWNLOAD_BYTES,
     MaxClient,
@@ -333,8 +335,45 @@ class TestSafetyHelpers:
         assert _is_allowed_download_url("https://i.oneme.ru/i?r=abc")
         assert _is_allowed_download_url("https://cdn.oneme.ru/file")
         assert _is_allowed_download_url("https://web.max.ru/image")
+        assert _is_allowed_download_url("https://iv.okcdn.ru/video.mp4")
 
     def test_blocks_non_https_and_external_hosts(self):
         assert not _is_allowed_download_url("http://i.oneme.ru/i?r=abc")
         assert not _is_allowed_download_url("https://example.com/file")
         assert not _is_allowed_download_url("https://oneme.ru.evil.test/file")
+        assert not _is_allowed_download_url("https://okcdn.ru.evil.test/file")
+
+
+class TestVideoDownloadUrl:
+    @pytest.mark.asyncio
+    async def test_resolves_best_allowed_mp4_quality(self):
+        client = _make_client()
+        client.cmd = AsyncMock(return_value={
+            "MP4_720": "https://vd123.okcdn.ru/video.mp4",
+            "MP4_360": "https://vd123.okcdn.ru/video-small.mp4",
+        })
+
+        url = await client.download_video_url(
+            "190714046", chat_id=-100, message_id="message-1",
+        )
+
+        assert url == "https://vd123.okcdn.ru/video.mp4"
+        client.cmd.assert_awaited_once_with(
+            OpCode.VIDEO_DOWNLOAD_URL,
+            {
+                "videoId": 190714046,
+                "chatId": -100,
+                "messageId": "message-1",
+            },
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_external_video_url(self):
+        client = _make_client()
+        client.cmd = AsyncMock(return_value={
+            "MP4_1080": "https://example.com/video.mp4",
+        })
+
+        assert await client.download_video_url(
+            123, chat_id=-100, message_id="message-1",
+        ) is None

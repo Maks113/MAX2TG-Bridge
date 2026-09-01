@@ -192,3 +192,81 @@ class TestFileAttachment:
             message_thread_id=42,
         )
         sender.send.assert_not_awaited()
+
+
+class TestVideoAttachment:
+    @pytest.mark.asyncio
+    async def test_resolves_and_sends_original_video(self):
+        client = MagicMock()
+        client.download_video_url = AsyncMock(
+            return_value="https://vd123.okcdn.ru/video.mp4"
+        )
+        client.download_file = AsyncMock(return_value=b"video bytes")
+        sender = MagicMock()
+        sender.send_video = AsyncMock()
+        sender.send_photo = AsyncMock()
+        sender.send = AsyncMock()
+        msg = MaxMessage(chat_id=-78273486848085, message_id="message-1")
+
+        handled = await _send_attach(
+            {
+                "_type": "VIDEO",
+                "videoId": 190714046,
+                "token": "attach-token",
+                "thumbnail": "https://iv.okcdn.ru/preview.jpg",
+            },
+            client,
+            sender,
+            "header",
+            thread_id=10,
+            msg=msg,
+        )
+
+        assert handled is True
+        client.download_video_url.assert_awaited_once_with(
+            190714046,
+            chat_id=-78273486848085,
+            message_id="message-1",
+        )
+        client.download_file.assert_awaited_once_with(
+            "https://vd123.okcdn.ru/video.mp4"
+        )
+        sender.send_video.assert_awaited_once_with(
+            b"video bytes",
+            caption="header",
+            filename="190714046.mp4",
+            message_thread_id=10,
+        )
+        sender.send_photo.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_preview(self):
+        client = MagicMock()
+        client.download_video_url = AsyncMock(return_value=None)
+        client.download_file = AsyncMock(return_value=b"preview bytes")
+        sender = MagicMock()
+        sender.send_video = AsyncMock()
+        sender.send_photo = AsyncMock()
+        sender.send = AsyncMock()
+        msg = MaxMessage(chat_id=-78273486848085, message_id="message-1")
+
+        handled = await _send_attach(
+            {
+                "_type": "VIDEO",
+                "videoId": 190714046,
+                "thumbnail": "https://iv.okcdn.ru/preview.jpg",
+            },
+            client,
+            sender,
+            "header",
+            thread_id=10,
+            msg=msg,
+        )
+
+        assert handled is True
+        sender.send_video.assert_not_awaited()
+        sender.send_photo.assert_awaited_once_with(
+            b"preview bytes",
+            caption="header\n<i>[видео — оригинал не удалось загрузить]</i>",
+            message_thread_id=10,
+        )

@@ -98,13 +98,43 @@ async def _send_attach(
         return True
 
     if atype == "VIDEO":
+        video_id = attach.get("videoId")
+        chat_id = msg.chat_id if msg else None
+        message_id = msg.message_id if msg else None
+        if video_id is not None and chat_id is not None and message_id:
+            url = await client.download_video_url(
+                video_id, chat_id=chat_id, message_id=message_id,
+            )
+            if url:
+                data = await client.download_file(url)
+                if data:
+                    await sender.send_video(
+                        data,
+                        caption=header_text,
+                        filename=f"{video_id}.mp4",
+                        message_thread_id=thread_id,
+                    )
+                    return True
+        elif video_id is not None:
+            log.warning(
+                "Cannot resolve VIDEO without chat/message context: videoId=%s",
+                video_id,
+            )
+
         thumb = attach.get("thumbnail")
         if thumb:
             data = await client.download_file(thumb)
             if data:
-                await sender.send_photo(data, caption=f"{header_text}\n<i>[видео — превью]</i>", message_thread_id=thread_id)
+                await sender.send_photo(
+                    data,
+                    caption=f"{header_text}\n<i>[видео — оригинал не удалось загрузить]</i>",
+                    message_thread_id=thread_id,
+                )
                 return True
-        await sender.send(f"{header_text}\n<i>[видео]</i>", message_thread_id=thread_id)
+        await sender.send(
+            f"{header_text}\n<i>[видео — не удалось загрузить]</i>",
+            message_thread_id=thread_id,
+        )
         return True
 
     if atype == "FILE":
