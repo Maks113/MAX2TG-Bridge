@@ -45,7 +45,7 @@
 - Уведомления о статусе подключения к MAX в General-топик (с троттлингом)
 
 ### Telegram → MAX
-- Текст с форматированием (`STRONG`, `EMPHASIZED`, `STRIKETHROUGH`, `UNDERLINE`, `MONOSPACED`, `BLOCKQUOTE`, `LINK`)
+- Текст с форматированием в legacy backend (`STRONG`, `EMPHASIZED`, `STRIKETHROUGH`, `UNDERLINE`, `MONOSPACED`, `BLOCKQUOTE`, `LINK`); в PyMax backend пока plain text
 - Фото (через нативный photo-upload MAX, опкод 80)
 - Документы, видео, аудио (через file-upload MAX, опкод 87)
 - Голосовые приходят в MAX как файл `.ogg` (опкод нативной voice-загрузки пока не реверсен)
@@ -76,7 +76,7 @@
   └────────────────┘                 └──────────────────┘
 ```
 
-- `app/main.py` — точка входа: загружает `.env`, поднимает MaxClient (WS), Telegram Application (polling), привязывает их через TopicStore.
+- `app/main.py` — точка входа: загружает `.env`, поднимает выбранный MAX backend, Telegram Application (polling), привязывает их через TopicStore.
 - `app/max_client.py` — WebSocket-клиент MAX. Опкоды auth/dispatch/send/upload, retries, reconnect.
 - `app/max_listener.py` — приём сообщений из MAX, маршрутизация в Telegram-топики, авто-создание топиков, постинг карточки.
 - `app/resolver.py` — кеш контактов и чатов MAX.
@@ -228,6 +228,7 @@ sudo journalctl -u max2tg -f
 5. **Кастомные эмодзи как реакции** — Telegram запрещает ботам ставить custom-emoji реакции, поэтому используется обычная `👀`.
 6. **Phone / about** в `/profile` отсутствуют — опкод `CONTACT_GET` (32) возвращает только имя и аватар.
 7. **Ротация MAX-токена** — если ты залогинишься в web.max.ru с другого устройства, токен моста может стать невалидным (handshake висит без `Authorized!`). Решение: обновить `MAX_TOKEN` в `.env`.
+8. **PyMax backend** — SMS/QR-login требует live-проверки на реальном аккаунте MAX; unit-тесты покрывают адаптер и контракт. Отправка Telegram → MAX через PyMax пока не сохраняет legacy text entities.
 
 ---
 
@@ -240,7 +241,7 @@ pip install pytest pytest-asyncio
 pytest -q
 ```
 
-Покрытие: `app/topics.py` (TopicStore), `app/config.py` (загрузка env), `app/max_listener.py` (форматирование, throttle), `app/tg_handler.py` (роутинг команд и медиа), `app/max_client.py` (опкоды). 191 тест.
+Покрытие: `app/topics.py` (TopicStore), `app/config.py` (загрузка env), `app/max_listener.py` (форматирование, throttle), `app/tg_handler.py` (роутинг команд и медиа), `app/max_client.py` (опкоды), PyMax auth factory и PyMax adapter. 228 тестов.
 
 ### Структура проекта
 
@@ -249,20 +250,22 @@ max2tg/
 ├── app/
 │   ├── main.py             # точка входа
 │   ├── config.py           # загрузка .env
-│   ├── max_client.py       # MAX WebSocket клиент
-│   ├── max_listener.py     # MAX → TG роутинг
+│   ├── max_client.py       # legacy MAX WebSocket клиент
+│   ├── pymax_auth.py       # PyMax Client/WebClient auth factory
+│   ├── pymax_client.py     # PyMax adapter под MaxClient-контракт
+│   ├── max_listener.py     # MAX → TG роутинг + backend wiring
 │   ├── resolver.py         # кеш контактов / чатов
 │   ├── tg_sender.py        # TG отправка + ensure_topic
 │   ├── tg_handler.py       # TG → MAX роутинг и команды
 │   └── topics.py           # TopicStore (JSON-карта)
-├── tests/                  # 191 pytest
+├── tests/                  # 228 pytest
 ├── docs/cover.jpg          # обложка README
 ├── state/                  # рантайм-данные (gitignored)
 ├── logs/                   # логи (gitignored)
 ├── docker-compose.yml
 ├── Dockerfile
 ├── requirements.txt
-├── CLAUDE.md               # контекст для AI-ассистентов
+├── AGENTS.md               # контекст для AI-ассистентов
 └── README.md
 ```
 
@@ -271,7 +274,7 @@ max2tg/
 ## Disclaimer
 
 1. Проект **независимый, неофициальный**, не связан с разработчиками MAX (VK Group) или Telegram (TG Messenger Inc.).
-2. Использует **reverse-engineered** протокол MAX (WebSocket `ws-api.oneme.ru`). Протокол может измениться без предупреждения — мост может перестать работать.
+2. Использует неофициальные MAX-клиенты: legacy reverse-engineered WebSocket (`ws-api.oneme.ru`) и опциональный PyMax backend. Протокол может измениться без предупреждения — мост может перестать работать.
 3. Работает как **userbot** к твоему MAX-аккаунту — есть формальный риск блокировки по правилам сервиса. Используй на свой страх и риск.
 4. Программа предоставляется **«как есть»**, без гарантий.
 
@@ -280,4 +283,4 @@ max2tg/
 ## Лицензия
 
 [MIT](LICENSE), на основе [Aist/max2tg](https://github.com/Aist/max2tg).
-Большое спасибо [nsdkinx/vkmax](https://github.com/nsdkinx/vkmax) и [max-messenger/max-botapi-python](https://github.com/max-messenger/max-botapi-python) за документацию опкодов и enum'ы стилей.
+Большое спасибо [nsdkinx/vkmax](https://github.com/nsdkinx/vkmax), [max-messenger/max-botapi-python](https://github.com/max-messenger/max-botapi-python) и [PyMax](https://docs.pymax.org/) за документацию, enum'ы и клиентскую библиотеку.

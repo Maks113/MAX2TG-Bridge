@@ -4,7 +4,10 @@
 
 ## Что это
 
-Двусторонний мост MAX (`ws-api.oneme.ru`) ↔ Telegram через форум-топики супергруппы. Каждый MAX-чат = свой topic в Telegram. Userbot подключается WebSocket'ом к MAX по `__oneme_auth` токену, Telegram-side — обычный bot через python-telegram-bot polling.
+Двусторонний мост MAX ↔ Telegram через форум-топики супергруппы. Каждый MAX-чат = свой topic в Telegram. Telegram-side — обычный bot через python-telegram-bot polling. MAX-side поддерживает два backend-а:
+
+- `legacy`: собственный reverse-engineered WebSocket-клиент к `wss://ws-api.oneme.ru/websocket` по `MAX_TOKEN` / `MAX_DEVICE_ID`.
+- `pymax`: адаптер поверх PyMax (`maxapi-python`) с SMS-авторизацией (`Client`) или QR-авторизацией (`WebClient`).
 
 Основан на [Aist/max2tg](https://github.com/Aist/max2tg), но переписан вокруг форум-топиков и расширен. Лицензия MIT.
 
@@ -14,19 +17,55 @@
 app/
   main.py          # entry: load .env → MaxClient + Telegram Application
   config.py        # Settings dataclass + load_settings()
-  max_client.py    # WS клиент MAX. Opcodes, retry, reconnect, upload_*
-  max_listener.py  # MAX → TG handler (incoming), auto-topic creation
+  max_client.py    # legacy WS клиент MAX. Opcodes, retry, reconnect, upload_*
+  pymax_auth.py    # фабрика PyMax Client/WebClient + providers для auth
+  pymax_client.py  # PyMaxClientAdapter под старый MaxClient-контракт
+  max_listener.py  # MAX → TG handler (incoming), auto-topic creation, backend wiring
   resolver.py      # кеш контактов / чатов (chats_raw, contacts_raw)
   tg_sender.py     # TelegramSender + ensure_topic (create/rename)
   tg_handler.py    # TG → MAX handler + команды /bind, /add, /profile, /intro, /del, /help
   topics.py        # TopicStore: JSON-карта max_chat_id ↔ thread_id
-tests/             # 191 pytest, asyncio_mode=auto
+tests/             # 228 pytest, asyncio_mode=auto
 docs/cover.jpg     # обложка README
-state/             # runtime (топик-карта), gitignored
+state/             # runtime: topics.json + PyMax SQLite sessions, gitignored
 logs/              # логи, gitignored
 ```
 
+## MAX backend-и
+
+### Legacy backend
+
+Переменные:
+
+- `MAX_CLIENT_BACKEND=legacy` или unset.
+- `MAX_TOKEN` — `__oneme_auth` из Local Storage `web.max.ru`.
+- `MAX_DEVICE_ID` — `__oneme_device_id`.
+
+Код: `app/max_client.py`. Это низкоуровневый WS/opcode-клиент. Он возвращает `MaxMessage`, raw attach dicts и snapshot dict, которые потребляет `ContactResolver`.
+
+### PyMax backend
+
+Переменные:
+
+- `MAX_CLIENT_BACKEND=pymax`.
+- `MAX_PYMAX_AUTH=sms|qr`.
+- `MAX_PHONE` обязателен только для `sms`.
+- `MAX_2FA_PASSWORD` опционален для SMS-flow с включённым 2FA.
+- `MAX_PYMAX_WORK_DIR` по умолчанию `STATE_DIR/pymax`.
+- `MAX_PYMAX_SESSION_NAME` по умолчанию `pymax-sms.db` или `pymax-qr.db`.
+
+Код:
+
+- `app/pymax_auth.py` строит `pymax.Client` или `pymax.WebClient`.
+- `app/pymax_client.py` адаптирует PyMax typed models к старому контракту `MaxClient`.
+
+PyMax adapter сохраняет совместимость с `max_listener`, `tg_handler` и `resolver`: входящие PyMax `Message` конвертируются в `MaxMessage`, вложения нормализуются к legacy dict shape, snapshot собирается из `client.me`, `client.chats`, `client.contacts`.
+
+Практическая оговорка: Telegram → MAX text entities в PyMax backend сейчас отправляются plain text, потому что публичный `pymax.send_message()` не принимает legacy `elements` напрямую. Legacy backend продолжает отправлять `elements`.
+
 ## Протокол MAX (наши находки)
+
+Этот раздел относится к legacy backend.
 
 WebSocket: `wss://ws-api.oneme.ru/websocket`, `Origin: https://web.max.ru`.
 
@@ -101,11 +140,12 @@ WebSocket: `wss://ws-api.oneme.ru/websocket`, `Origin: https://web.max.ru`.
 ## Состояние / runtime
 
 - `state/topics.json` — JSON-карта `max_chat_id ↔ {topic_id, title}`. Атомарно перезаписывается (tmpfile + os.replace). Critical для непересоздавания топиков. Том должен быть mounted в docker-compose.
+- `state/pymax/*.db` — SQLite-сессии PyMax. Не удалять, иначе при следующем запуске PyMax снова попросит SMS-код или QR-вход.
 - `logs/max2tg.log` — RotatingFileHandler 10MB × 5.
 
 ## Тесты
 
-`pytest -q` → 191 passed. asyncio_mode=auto. Покрытие: TopicStore, config, listener helpers (форматирование размеров, throttle), tg_handler (роутинг команд, маршрутизация медиа), max_client опкоды.
+`pytest -q` → 228 passed. asyncio_mode=auto. Покрытие: TopicStore, config, listener helpers (форматирование размеров, throttle), tg_handler (роутинг команд, маршрутизация медиа), max_client опкоды, PyMax auth factory и PyMax adapter.
 
 ## Деплой
 
@@ -117,6 +157,8 @@ Docker. `docker-compose.yml` биндит `./logs:/app/logs` и `./state:/app/st
 - Voice MAX → TG: для нового `_type=UNSUPPORTED` нет рабочего download-опкода. Опкод 84/85 — calls service. Probing блокирован WS-disconnect на proto.payload.
 - `/u/<token>` (user share) — opcode 57 ищет в chat-namespace. Server hint «No link or token found» для `{token}` payload — обманчив, реально опкод хочет только `link` URL.
 - Phone/about для контакта — `CONTACT_GET` не возвращает. Нужен другой опкод (предположительно тот же, что юзает web.max.ru при открытии профиля справа).
+- PyMax backend требует live-проверки на реальном аккаунте: unit-тесты покрывают адаптер и контракт, но SMS/QR-login нельзя проверить без интерактивного доступа к MAX.
+- PyMax backend пока не сохраняет legacy text formatting elements при отправке Telegram → MAX.
 
 ## Если нужно ребутнуть знание о репо
 
@@ -138,4 +180,5 @@ ssh max2tg "cd /opt/max2tg && docker compose ps && docker compose logs --tail=50
 - Upstream: [Aist/max2tg](https://github.com/Aist/max2tg)
 - Reference opcode-doc: [nsdkinx/vkmax](https://github.com/nsdkinx/vkmax) (особенно [docs/opcodes.md](https://github.com/nsdkinx/vkmax/blob/main/docs/opcodes.md))
 - Официальный бот-API MAX: [max-messenger/max-botapi-python](https://github.com/max-messenger/max-botapi-python) — там же `enums/text_style.py` с правильными именами стилей
+- PyMax: [docs.pymax.org](https://docs.pymax.org/) / PyPI `maxapi-python`
 - Альтернативный мост: [mimimiartartart/MaxToTelegramBridge](https://github.com/mimimiartartart/MaxToTelegramBridge) (one-topic-per-всё, аналогичные паттерны)
