@@ -1,5 +1,6 @@
 services:
   max2tg:
+    image: ghcr.io/maks113/max2tg-bridge:latest
     build: .
     restart: unless-stopped
     env_file: .env
