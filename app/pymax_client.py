@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import aiohttp
+import base64
 import logging
 from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
 
+import aiohttp
 from yarl import URL
 
 from app.config import Settings
@@ -30,6 +31,8 @@ def _plain(value: Any) -> Any:
         return {_plain(k): _plain(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_plain(v) for v in value]
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
     return value
 
 
@@ -39,7 +42,10 @@ def _model_dict(value: Any) -> dict:
     if isinstance(value, dict):
         return _plain(value)
     if hasattr(value, "model_dump"):
-        return _plain(value.model_dump(by_alias=True, mode="json"))
+        try:
+            return _plain(value.model_dump(by_alias=True, mode="json"))
+        except UnicodeDecodeError:
+            return _plain(value.model_dump(by_alias=True, mode="python"))
     return _plain(vars(value))
 
 
