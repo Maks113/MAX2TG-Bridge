@@ -2,8 +2,11 @@ import asyncio
 import logging
 from datetime import datetime
 from html import escape
+from typing import Any
 
 from app.max_client import MaxClient, MaxMessage, OpCode
+from app.config import Settings
+from app.pymax_client import PyMaxClientAdapter
 from app.resolver import ContactResolver
 from app.tg_sender import TelegramSender
 
@@ -312,6 +315,15 @@ def create_max_client(
         max_download_bytes=max_download_bytes,
         chat_ids=max_chat_ids,
     )
+    return configure_max_client(client, sender)
+
+
+def create_pymax_client(settings: Settings, sender: TelegramSender) -> PyMaxClientAdapter:
+    client = PyMaxClientAdapter(settings)
+    return configure_max_client(client, sender)
+
+
+def configure_max_client(client: Any, sender: TelegramSender):
     resolver = ContactResolver(client=client)
     # Expose for tg_handler commands like /profile.
     client.resolver = resolver

@@ -67,6 +67,62 @@ class TestLoadSettingsValid:
         assert s.max_device_id == "device-abc"
         assert s.tg_bot_token == "123456:AAABBBCCC"
         assert s.tg_chat_id == "-100123456"
+        assert s.max_client_backend == "legacy"
+        assert s.max_pymax_auth == "sms"
+
+    def test_pymax_sms_auth_uses_phone_session_settings(self):
+        env = {
+            "MAX_CLIENT_BACKEND": "pymax",
+            "MAX_PYMAX_AUTH": "sms",
+            "MAX_PHONE": "+79990000000",
+            "TG_BOT_TOKEN": "123456:AAABBBCCC",
+            "TG_CHAT_ID": "-100123456",
+        }
+        s = _load_settings_with_env(env)
+        assert s.max_client_backend == "pymax"
+        assert s.max_pymax_auth == "sms"
+        assert s.max_phone == "+79990000000"
+        assert s.max_token is None
+        assert s.max_device_id is None
+        assert s.max_pymax_work_dir == "state/pymax"
+        assert s.max_pymax_session_name == "pymax-sms.db"
+
+    def test_pymax_qr_auth_does_not_require_phone(self):
+        env = {
+            "MAX_CLIENT_BACKEND": "pymax",
+            "MAX_PYMAX_AUTH": "qr",
+            "TG_BOT_TOKEN": "123456:AAABBBCCC",
+            "TG_CHAT_ID": "-100123456",
+            "STATE_DIR": "runtime-state",
+        }
+        s = _load_settings_with_env(env)
+        assert s.max_client_backend == "pymax"
+        assert s.max_pymax_auth == "qr"
+        assert s.max_phone is None
+        assert s.max_pymax_work_dir == "runtime-state/pymax"
+        assert s.max_pymax_session_name == "pymax-qr.db"
+
+    def test_pymax_session_settings_can_be_overridden(self):
+        s = _load_settings_with_env(_env(
+            MAX_CLIENT_BACKEND="pymax",
+            MAX_PYMAX_AUTH="qr",
+            MAX_PYMAX_WORK_DIR="cache/max",
+            MAX_PYMAX_SESSION_NAME="main.db",
+            MAX_2FA_PASSWORD="secret",
+        ))
+        assert s.max_pymax_work_dir == "cache/max"
+        assert s.max_pymax_session_name == "main.db"
+        assert s.max_2fa_password == "secret"
+
+    def test_rejects_unknown_max_client_backend(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_CLIENT_BACKEND="other"))
+        assert "MAX_CLIENT_BACKEND" in str(exc.value)
+
+    def test_rejects_unknown_pymax_auth_mode(self):
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(_env(MAX_PYMAX_AUTH="password"))
+        assert "MAX_PYMAX_AUTH" in str(exc.value)
 
     def test_debug_default_false(self):
         s = _load_settings_with_env(_env())
@@ -211,3 +267,14 @@ class TestLoadSettingsMissing:
         with pytest.raises(SystemExit) as exc:
             _load_settings_with_env(_env(MAX_TOKEN=""))
         assert "MAX_TOKEN" in str(exc.value)
+
+    def test_pymax_sms_requires_phone(self):
+        env = {
+            "MAX_CLIENT_BACKEND": "pymax",
+            "MAX_PYMAX_AUTH": "sms",
+            "TG_BOT_TOKEN": "123456:AAABBBCCC",
+            "TG_CHAT_ID": "-100123456",
+        }
+        with pytest.raises(SystemExit) as exc:
+            _load_settings_with_env(env)
+        assert "MAX_PHONE" in str(exc.value)

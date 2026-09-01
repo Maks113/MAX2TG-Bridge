@@ -107,7 +107,9 @@
 5. (Опционально) Telegram user ID разрешённых пользователей — для `TG_ALLOWED_USER_IDS` (через запятую; ID покажет @userinfobot в личке).
 6. В настройках реакций супергруппы разреши «**Все эмодзи**», чтобы бот мог ставить 👀 на отправленные ответы.
 
-### 2. Получение токенов MAX
+### 2. Авторизация MAX
+
+По умолчанию используется legacy-клиент:
 
 1. Открой [web.max.ru](https://web.max.ru) в Chrome/Firefox и войди.
 2. F12 → вкладка **Application** → **Local Storage** → `https://web.max.ru`.
@@ -117,6 +119,11 @@
 
 > Этими значениями можно полностью завладеть аккаунтом MAX — не показывай никому.
 > При логине в web.max.ru с другого устройства токен может ротироваться — тогда повторите шаги выше и обновите `.env`.
+
+Для миграции на PyMax поддерживаются оба штатных flow библиотеки:
+
+- `MAX_CLIENT_BACKEND=pymax` + `MAX_PYMAX_AUTH=sms` — TCP `Client`, первичный вход по `MAX_PHONE` и SMS-коду, сессия сохраняется в SQLite.
+- `MAX_CLIENT_BACKEND=pymax` + `MAX_PYMAX_AUTH=qr` — WebSocket `WebClient`, первичный вход по QR; ссылка для QR пишется в лог.
 
 ### 3. Деплой (Docker, рекомендованный)
 
@@ -175,8 +182,14 @@ sudo journalctl -u max2tg -f
 
 | Переменная | Обязательная | Описание |
 |---|---|---|
-| `MAX_TOKEN` | да | `__oneme_auth` из Local Storage web.max.ru |
-| `MAX_DEVICE_ID` | да | `__oneme_device_id` оттуда же |
+| `MAX_CLIENT_BACKEND` | нет | `legacy` по умолчанию; `pymax` включает клиент на PyMax |
+| `MAX_TOKEN` | для `legacy` | `__oneme_auth` из Local Storage web.max.ru |
+| `MAX_DEVICE_ID` | для `legacy` | `__oneme_device_id` оттуда же |
+| `MAX_PYMAX_AUTH` | для `pymax` | `sms` или `qr`; по умолчанию `sms` |
+| `MAX_PHONE` | для `pymax` + `sms` | Номер телефона для первичной SMS-авторизации PyMax |
+| `MAX_2FA_PASSWORD` | нет | Пароль 2FA для PyMax SMS-авторизации, если включён на аккаунте |
+| `MAX_PYMAX_WORK_DIR` | нет | Папка SQLite-сессии PyMax, по умолчанию `STATE_DIR/pymax` |
+| `MAX_PYMAX_SESSION_NAME` | нет | Имя файла сессии PyMax, по умолчанию `pymax-sms.db` или `pymax-qr.db` |
 | `TG_BOT_TOKEN` | да | Токен бота от @BotFather |
 | `TG_CHAT_ID` | да | ID супергруппы (отрицательное число вида `-100…`) |
 | `TG_ALLOWED_USER_IDS` | нет | Telegram user ID через запятую — ограничивают, кто может слать команды и ответы |
