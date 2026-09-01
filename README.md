@@ -137,6 +137,19 @@ docker compose logs -f
 
 Готово. Бот в General-топике супергруппы пришлёт `✅ Max: подключён | чатов: N`. При первом входящем сообщении из MAX автоматически создастся топик.
 
+Готовый образ публикуется для `linux/amd64` и `linux/arm64` при создании GitHub Release:
+
+```bash
+docker pull ghcr.io/maks113/max2tg-bridge:latest
+```
+
+Для обновления установленного через Compose экземпляра:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
 Том `./state` хранит карту `max_chat_id ↔ thread_id` (`state/topics.json`) — не теряй его, иначе при следующих сообщениях создадутся дубли топиков.
 Там же хранится SQLite-сессия PyMax; её потеря потребует повторной QR/SMS-авторизации.
 
