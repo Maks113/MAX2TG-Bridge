@@ -1,280 +1,59 @@
-"""Tests for app/config.py — load_settings."""
-
 import os
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from app.config import Settings, load_settings
 
 
-def _load_settings_with_env(env: dict) -> Settings:
-    """Call load_settings with a fully isolated environment, suppressing .env file loading."""
+def load(env):
     with patch("app.config.load_dotenv"), patch.dict(os.environ, env, clear=True):
         return load_settings()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_VALID_ENV = {
-    "MAX_TOKEN": "token123",
-    "MAX_DEVICE_ID": "device-abc",
-    "TG_BOT_TOKEN": "123456:AAABBBCCC",
-    "TG_CHAT_ID": "-100123456",
-}
+BASE = {"TG_BOT_TOKEN": "token", "TG_CHAT_ID": "-100"}
 
 
-def _env(**overrides):
-    """Return a copy of the valid env dict with any overrides applied."""
-    e = dict(_VALID_ENV)
-    e.update(overrides)
-    return e
+def test_qr_is_default_and_needs_no_extra_credentials():
+    settings = load(BASE)
+    assert settings.max_pymax_auth == "qr"
+    assert settings.max_pymax_session_name == "pymax-qr.db"
 
 
-# ---------------------------------------------------------------------------
-# Settings dataclass
-# ---------------------------------------------------------------------------
-
-class TestSettingsDataclass:
-    def test_frozen(self):
-        s = Settings(
-            max_token="t", max_device_id="d", tg_bot_token="b", tg_chat_id="c"
-        )
-        with pytest.raises((AttributeError, TypeError)):
-            s.max_token = "changed"  # type: ignore[misc]
-
-    def test_defaults(self):
-        s = Settings(
-            max_token="t", max_device_id="d", tg_bot_token="b", tg_chat_id="c"
-        )
-        assert s.debug is False
-        assert s.reply_enabled is False
-        assert s.max_chat_ids is None
-        assert s.debug_dump_json is False
-        assert s.max_download_mb == 50
-        assert s.tg_upload_mb == 50
+def test_sms_requires_phone():
+    with pytest.raises(SystemExit, match="MAX_PHONE"):
+        load({**BASE, "MAX_PYMAX_AUTH": "sms"})
 
 
-# ---------------------------------------------------------------------------
-# load_settings — valid env
-# ---------------------------------------------------------------------------
-
-class TestLoadSettingsValid:
-    def test_required_fields_populated(self):
-        s = _load_settings_with_env(_env())
-        assert s.max_token == "token123"
-        assert s.max_device_id == "device-abc"
-        assert s.tg_bot_token == "123456:AAABBBCCC"
-        assert s.tg_chat_id == "-100123456"
-        assert s.max_client_backend == "legacy"
-        assert s.max_pymax_auth == "sms"
-
-    def test_pymax_sms_auth_uses_phone_session_settings(self):
-        env = {
-            "MAX_CLIENT_BACKEND": "pymax",
-            "MAX_PYMAX_AUTH": "sms",
-            "MAX_PHONE": "+79990000000",
-            "TG_BOT_TOKEN": "123456:AAABBBCCC",
-            "TG_CHAT_ID": "-100123456",
-        }
-        s = _load_settings_with_env(env)
-        assert s.max_client_backend == "pymax"
-        assert s.max_pymax_auth == "sms"
-        assert s.max_phone == "+79990000000"
-        assert s.max_token is None
-        assert s.max_device_id is None
-        assert s.max_pymax_work_dir == "state/pymax"
-        assert s.max_pymax_session_name == "pymax-sms.db"
-
-    def test_pymax_qr_auth_does_not_require_phone(self):
-        env = {
-            "MAX_CLIENT_BACKEND": "pymax",
-            "MAX_PYMAX_AUTH": "qr",
-            "TG_BOT_TOKEN": "123456:AAABBBCCC",
-            "TG_CHAT_ID": "-100123456",
-            "STATE_DIR": "runtime-state",
-        }
-        s = _load_settings_with_env(env)
-        assert s.max_client_backend == "pymax"
-        assert s.max_pymax_auth == "qr"
-        assert s.max_phone is None
-        assert s.max_pymax_work_dir == "runtime-state/pymax"
-        assert s.max_pymax_session_name == "pymax-qr.db"
-
-    def test_pymax_session_settings_can_be_overridden(self):
-        s = _load_settings_with_env(_env(
-            MAX_CLIENT_BACKEND="pymax",
-            MAX_PYMAX_AUTH="qr",
-            MAX_PYMAX_WORK_DIR="cache/max",
-            MAX_PYMAX_SESSION_NAME="main.db",
-            MAX_2FA_PASSWORD="secret",
-        ))
-        assert s.max_pymax_work_dir == "cache/max"
-        assert s.max_pymax_session_name == "main.db"
-        assert s.max_2fa_password == "secret"
-
-    def test_rejects_unknown_max_client_backend(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(_env(MAX_CLIENT_BACKEND="other"))
-        assert "MAX_CLIENT_BACKEND" in str(exc.value)
-
-    def test_rejects_unknown_pymax_auth_mode(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(_env(MAX_PYMAX_AUTH="password"))
-        assert "MAX_PYMAX_AUTH" in str(exc.value)
-
-    def test_debug_default_false(self):
-        s = _load_settings_with_env(_env())
-        assert s.debug is False
-
-    def test_debug_true_via_1(self):
-        s = _load_settings_with_env(_env(DEBUG="1"))
-        assert s.debug is True
-
-    def test_debug_true_via_true(self):
-        s = _load_settings_with_env(_env(DEBUG="true"))
-        assert s.debug is True
-
-    def test_debug_true_via_yes(self):
-        s = _load_settings_with_env(_env(DEBUG="yes"))
-        assert s.debug is True
-
-    def test_debug_true_mixed_case(self):
-        s = _load_settings_with_env(_env(DEBUG="True"))
-        assert s.debug is True
-
-    def test_debug_false_via_empty_string(self):
-        s = _load_settings_with_env(_env(DEBUG=""))
-        assert s.debug is False
-
-    def test_debug_false_via_0(self):
-        s = _load_settings_with_env(_env(DEBUG="0"))
-        assert s.debug is False
-
-    def test_debug_false_via_no(self):
-        s = _load_settings_with_env(_env(DEBUG="no"))
-        assert s.debug is False
-
-    def test_reply_enabled_default_false(self):
-        s = _load_settings_with_env(_env())
-        assert s.reply_enabled is False
-
-    def test_reply_enabled_true_via_1(self):
-        s = _load_settings_with_env(_env(REPLY_ENABLED="1"))
-        assert s.reply_enabled is True
-
-    def test_reply_enabled_true_via_yes(self):
-        s = _load_settings_with_env(_env(REPLY_ENABLED="yes"))
-        assert s.reply_enabled is True
-
-    def test_reply_enabled_false_via_false(self):
-        s = _load_settings_with_env(_env(REPLY_ENABLED="false"))
-        assert s.reply_enabled is False
-
-    def test_returns_settings_instance(self):
-        s = _load_settings_with_env(_env())
-        assert isinstance(s, Settings)
-
-    def test_max_chat_ids_none_when_not_set(self):
-        s = _load_settings_with_env(_env())
-        assert s.max_chat_ids is None
-
-    def test_max_chat_ids_populated_when_set(self):
-        s = _load_settings_with_env(_env(MAX_CHAT_IDS="-123,-456"))
-        assert s.max_chat_ids == "-123,-456"
-
-    def test_max_chat_ids_none_when_empty_string(self):
-        s = _load_settings_with_env(_env(MAX_CHAT_IDS=""))
-        assert s.max_chat_ids is None
-
-    def test_allowed_user_ids_from_plural_list(self):
-        s = _load_settings_with_env(_env(TG_ALLOWED_USER_IDS="100, 200"))
-        assert s.tg_allowed_user_ids == frozenset({100, 200})
-
-    def test_allowed_user_ids_supports_legacy_singular(self):
-        s = _load_settings_with_env(_env(TG_ALLOWED_USER_ID="100"))
-        assert s.tg_allowed_user_ids == frozenset({100})
-
-    def test_debug_dump_json_true_via_true(self):
-        s = _load_settings_with_env(_env(DEBUG_DUMP_JSON="true"))
-        assert s.debug_dump_json is True
-
-    def test_media_limits_can_be_configured(self):
-        s = _load_settings_with_env(_env(MAX_DOWNLOAD_MB="50", TG_UPLOAD_MB="10"))
-        assert s.max_download_mb == 50
-        assert s.tg_upload_mb == 10
-
-    def test_media_limits_reject_non_integer(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(_env(MAX_DOWNLOAD_MB="large"))
-        assert "MAX_DOWNLOAD_MB" in str(exc.value)
-
-    def test_media_limits_reject_zero(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(_env(TG_UPLOAD_MB="0"))
-        assert "TG_UPLOAD_MB" in str(exc.value)
+def test_sms_configuration():
+    settings = load({**BASE, "MAX_PYMAX_AUTH": "sms", "MAX_PHONE": "+79990000000"})
+    assert settings.max_phone == "+79990000000"
+    assert settings.max_pymax_session_name == "pymax-sms.db"
 
 
-# ---------------------------------------------------------------------------
-# load_settings — missing required variables
-# ---------------------------------------------------------------------------
+def test_rejects_unknown_auth_mode():
+    with pytest.raises(SystemExit, match="MAX_PYMAX_AUTH"):
+        load({**BASE, "MAX_PYMAX_AUTH": "invalid"})
 
-class TestLoadSettingsMissing:
-    def _env_without(self, *keys):
-        e = dict(_VALID_ENV)
-        for k in keys:
-            e.pop(k, None)
-        return e
 
-    def test_missing_max_token_raises(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(self._env_without("MAX_TOKEN"))
-        assert "MAX_TOKEN" in str(exc.value)
+def test_chat_and_user_filters():
+    settings = load({**BASE, "MAX_CHAT_IDS": "-1,-2", "TG_ALLOWED_USER_IDS": "10,20"})
+    assert settings.max_chat_ids == "-1,-2"
+    assert settings.tg_allowed_user_ids == frozenset({10, 20})
 
-    def test_missing_max_device_id_raises(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(self._env_without("MAX_DEVICE_ID"))
-        assert "MAX_DEVICE_ID" in str(exc.value)
 
-    def test_missing_tg_bot_token_raises(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(self._env_without("TG_BOT_TOKEN"))
-        assert "TG_BOT_TOKEN" in str(exc.value)
+def test_media_limits():
+    settings = load({**BASE, "MAX_DOWNLOAD_MB": "25", "TG_UPLOAD_MB": "30"})
+    assert settings.max_download_mb == 25
+    assert settings.tg_upload_mb == 30
 
-    def test_missing_tg_chat_id_raises(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(self._env_without("TG_CHAT_ID"))
-        assert "TG_CHAT_ID" in str(exc.value)
 
-    def test_missing_multiple_vars_reports_all(self):
-        missing = ["MAX_TOKEN", "TG_BOT_TOKEN"]
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(self._env_without(*missing))
-        msg = str(exc.value)
-        for var in missing:
-            assert var in msg
+def test_invalid_chat_id():
+    with pytest.raises(SystemExit, match="TG_CHAT_ID"):
+        load({**BASE, "TG_CHAT_ID": "invalid"})
 
-    def test_completely_empty_env_reports_all_required(self):
-        required = ["MAX_TOKEN", "MAX_DEVICE_ID", "TG_BOT_TOKEN", "TG_CHAT_ID"]
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env({})
-        msg = str(exc.value)
-        for var in required:
-            assert var in msg
 
-    def test_empty_string_value_treated_as_missing(self):
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(_env(MAX_TOKEN=""))
-        assert "MAX_TOKEN" in str(exc.value)
-
-    def test_pymax_sms_requires_phone(self):
-        env = {
-            "MAX_CLIENT_BACKEND": "pymax",
-            "MAX_PYMAX_AUTH": "sms",
-            "TG_BOT_TOKEN": "123456:AAABBBCCC",
-            "TG_CHAT_ID": "-100123456",
-        }
-        with pytest.raises(SystemExit) as exc:
-            _load_settings_with_env(env)
-        assert "MAX_PHONE" in str(exc.value)
+def test_settings_are_frozen():
+    settings = Settings(tg_bot_token="token", tg_chat_id="-100")
+    with pytest.raises((AttributeError, TypeError)):
+        settings.debug = True

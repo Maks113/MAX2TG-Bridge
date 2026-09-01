@@ -1,184 +1,45 @@
 # MAX2TG-Bridge — контекст для AI-ассистентов
 
-Этот файл — короткая шпаргалка для будущих сессий ассистента: что такое проект, что уже сделано, какие подводные камни.
+## Назначение
 
-## Что это
+Двусторонний мост MAX ↔ Telegram через форум-топики супергруппы. Каждый MAX-чат соответствует отдельному Telegram topic. Репозиторий полностью переведён на PyMax; собственного WebSocket-клиента больше нет.
 
-Двусторонний мост MAX ↔ Telegram через форум-топики супергруппы. Каждый MAX-чат = свой topic в Telegram. Telegram-side — обычный bot через python-telegram-bot polling. MAX-side поддерживает два backend-а:
-
-- `legacy`: собственный reverse-engineered WebSocket-клиент к `wss://ws-api.oneme.ru/websocket` по `MAX_TOKEN` / `MAX_DEVICE_ID`.
-- `pymax`: адаптер поверх PyMax (`maxapi-python`) с SMS-авторизацией (`Client`) или QR-авторизацией (`WebClient`).
-
-Основан на [Aist/max2tg](https://github.com/Aist/max2tg), но переписан вокруг форум-топиков и расширен. Лицензия MIT.
+Проект основан на [ircitdev/MAX2TG-Bridge](https://github.com/ircitdev/MAX2TG-Bridge), который развивает [Aist/max2tg](https://github.com/Aist/max2tg). Лицензия MIT.
 
 ## Структура
 
-```
-app/
-  main.py          # entry: load .env → MaxClient + Telegram Application
-  config.py        # Settings dataclass + load_settings()
-  max_client.py    # legacy WS клиент MAX. Opcodes, retry, reconnect, upload_*
-  pymax_auth.py    # фабрика PyMax Client/WebClient + providers для auth
-  pymax_client.py  # PyMaxClientAdapter под старый MaxClient-контракт
-  max_listener.py  # MAX → TG handler (incoming), auto-topic creation, backend wiring
-  resolver.py      # кеш контактов / чатов (chats_raw, contacts_raw)
-  tg_sender.py     # TelegramSender + ensure_topic (create/rename)
-  tg_handler.py    # TG → MAX handler + команды /bind, /add, /profile, /intro, /del, /help
-  topics.py        # TopicStore: JSON-карта max_chat_id ↔ thread_id
-tests/             # 228 pytest, asyncio_mode=auto
-docs/cover.jpg     # обложка README
-state/             # runtime: topics.json + PyMax SQLite sessions, gitignored
-logs/              # логи, gitignored
-```
+- `app/main.py` — запуск PyMax и Telegram polling.
+- `app/config.py` — конфигурация окружения; QR является auth-flow по умолчанию.
+- `app/pymax_auth.py` — фабрика `pymax.Client`/`WebClient`.
+- `app/pymax_client.py` — единый клиент MAX: события, чаты, контакты, медиа и безопасное скачивание.
+- `app/max_listener.py` — MAX → Telegram, альбомы, fallback вложений и уведомления reconnect.
+- `app/tg_handler.py` — Telegram → MAX, команды, буферизация альбомов и нативные PyMax attachments.
+- `app/tg_sender.py` — Telegram Bot API, топики, media groups, retry и увеличенные timeout.
+- `app/resolver.py` — кеш чатов и контактов.
+- `app/topics.py` — постоянная карта MAX chat ID ↔ Telegram thread ID.
 
-## MAX backend-и
+## PyMax
 
-### Legacy backend
+Переменные: `MAX_PYMAX_AUTH=qr|sms`, `MAX_PHONE` для SMS, опциональные `MAX_2FA_PASSWORD`, `MAX_PYMAX_WORK_DIR`, `MAX_PYMAX_SESSION_NAME`. Сессия находится в `state/pymax` и должна сохраняться между рестартами.
 
-Переменные:
+Используются нативные `Photo`, `Video`, `Voice` и `File`. Telegram-альбом собирается по `media_group_id` и отправляется одним сообщением MAX. MAX-вложения группируются в Telegram media group до 10 элементов. Чаты из `MAX_CHAT_IDS`, отсутствующие в incremental sync, догружаются через PyMax.
 
-- `MAX_CLIENT_BACKEND=legacy` или unset.
-- `MAX_TOKEN` — `__oneme_auth` из Local Storage `web.max.ru`.
-- `MAX_DEVICE_ID` — `__oneme_device_id`.
+Текст Telegram → MAX пока plain text: публичный `pymax.send_message()` не принимает старые entities напрямую.
 
-Код: `app/max_client.py`. Это низкоуровневый WS/opcode-клиент. Он возвращает `MaxMessage`, raw attach dicts и snapshot dict, которые потребляет `ContactResolver`.
+## Runtime
 
-### PyMax backend
-
-Переменные:
-
-- `MAX_CLIENT_BACKEND=pymax`.
-- `MAX_PYMAX_AUTH=sms|qr`.
-- `MAX_PHONE` обязателен только для `sms`.
-- `MAX_2FA_PASSWORD` опционален для SMS-flow с включённым 2FA.
-- `MAX_PYMAX_WORK_DIR` по умолчанию `STATE_DIR/pymax`.
-- `MAX_PYMAX_SESSION_NAME` по умолчанию `pymax-sms.db` или `pymax-qr.db`.
-
-Код:
-
-- `app/pymax_auth.py` строит `pymax.Client` или `pymax.WebClient`.
-- `app/pymax_client.py` адаптирует PyMax typed models к старому контракту `MaxClient`.
-
-PyMax adapter сохраняет совместимость с `max_listener`, `tg_handler` и `resolver`: входящие PyMax `Message` конвертируются в `MaxMessage`, вложения нормализуются к legacy dict shape, snapshot собирается из `client.me`, `client.chats`, `client.contacts`.
-
-Практическая оговорка: Telegram → MAX text entities в PyMax backend сейчас отправляются plain text, потому что публичный `pymax.send_message()` не принимает legacy `elements` напрямую. Legacy backend продолжает отправлять `elements`.
-
-## Протокол MAX (наши находки)
-
-Этот раздел относится к legacy backend.
-
-WebSocket: `wss://ws-api.oneme.ru/websocket`, `Origin: https://web.max.ru`.
-
-Пакет: `{"ver":11,"cmd":0,"seq":N,"opcode":OP,"payload":{...}}`. Ответ: `cmd=1` (OK) или `cmd=3` (error).
-
-| Opcode | Назначение |
-|---|---|
-| 1 | HEARTBEAT_PING (раз в 30 сек) |
-| 6 | HANDSHAKE |
-| 19 | AUTH_SNAPSHOT (логин + первый snapshot чатов) |
-| 32 | CONTACT_GET — возвращает `{names, baseUrl, photoId}`, **НЕ возвращает phone/about** |
-| 35 | CONTACT_PRESENCE |
-| 48 | CHAT_GET |
-| 57 | open by link — работает только для `/join/<token>` (group/channel); `/u/<token>` падает с `not.found / chat namespace` |
-| 64 | SEND_MESSAGE (text, elements, attaches, link) |
-| 65 | ATTACH_TYPING ("я загружаю PHOTO/AUDIO/...") |
-| 67 | EDIT_MESSAGE |
-| 80 | PHOTO_UPLOAD_URL → `{count:1}` → `{url}` → POST → `{photos:{...:{token}}}` → attach `{_type:PHOTO, photoToken}` |
-| 82 | VIDEO_UPLOAD_URL |
-| 83 | VIDEO_DOWNLOAD_URL (на видео из MAX) |
-| 84 | **CALLS** `createJoinLink` — НЕ аудио (как мы предполагали) |
-| 85 | **CALLS** `getOkCallData` — тоже не аудио |
-| 86 | Что-то с upload, требует `count + show + chatId`, возвращает `{}` |
-| 87 | FILE_UPLOAD_URL → `{count:1}` → `{info:[{url, fileId}]}` → POST → ждать DISPATCH `op=136` → attach `{_type:FILE, fileId}` |
-| 88 | FILE_DOWNLOAD_URL |
-| 128 | DISPATCH (incoming сообщения от MAX) |
-| 136 | UPLOAD_READY (server подтверждает обработку загруженного файла) |
-
-### Элементы форматирования в `SEND_MESSAGE.message.elements`
-
-`{type, from, length}` — `from` это codepoint-индекс (НЕ UTF-16; Telegram-side юзает UTF-16, конвертация в `tg_handler._utf16_to_char_offset`).
-
-| TG MessageEntityType | MAX element type |
-|---|---|
-| BOLD | `STRONG` |
-| ITALIC | `EMPHASIZED` |
-| STRIKETHROUGH | `STRIKETHROUGH` |
-| UNDERLINE | `UNDERLINE` |
-| CODE | `MONOSPACED` |
-| PRE | `BLOCKQUOTE` (MAX не имеет boxed code-block; квоту юзер сам выбрал) |
-| BLOCKQUOTE / EXPANDABLE_BLOCKQUOTE | `BLOCKQUOTE` |
-| TEXT_LINK | `LINK` с `attributes.url` |
-
-`CODE_BLOCK` отвергается валидацией (`No enum constant`). Имена `EMPHASIS`, `EM`, `ITALIC` тоже отвергались — пришли к `EMPHASIZED` (как в `max-botapi-python.enums.text_style`).
-
-### Attach типы (входящие из MAX)
-
-`PHOTO` (baseUrl/baseRawUrl + photoToken), `VIDEO` (thumbnail), `FILE` (url + name + size), `AUDIO` (url), `STICKER` (url), `SHARE` (url + title + description), `LOCATION` (lat/lon), `CONTACT` (name + phone), `UNSUPPORTED` (новый voice — `audioId + token + duration + wave`, опкод download неизвестен).
-
-### Особенности WS
-
-- `proto.payload` ошибки **закрывают WS** для некоторых опкодов (мост авто-реконнектится через 5 сек). Это мешает массовому пробингу: после первой неудачи остальные опкоды успевают только таймаут схватить.
-- Токен MAX молча ротируется при логине в web.max.ru с другого устройства: handshake проходит, AUTH_SNAPSHOT не приходит → бот висит. Решение — освежить `MAX_TOKEN`.
-
-## Telegram-side нюансы
-
-- Бот должен быть **админом супергруппы с правом «Управление темами»** (`can_manage_topics: true`) — иначе `create_forum_topic` падает.
-- Супергруппа должна быть **forum-enabled** (включены Topics).
-- Доступные реакции в чате — по умолчанию ограничены, для 👀 нужно «Все эмодзи» в настройках.
-- Bot API лимит загрузки файла — 20 МБ.
-- Bot **не может** ставить custom-emoji реакции (нужен Premium).
-
-## Команды (в супергруппе)
-
-- `/bind <chat_id|URL> [title]` — ручная привязка топика к MAX-чату.
-- `/add <https://max.ru/join/...>` — резолв инвайт-ссылки + создание топика. `/u/<token>` пока не поддерживается.
-- `/profile` — в топике, профиль собеседника (имя/id/аватар).
-- `/intro` — перепост закреплённой карточки.
-- `/del` — удалить топик с подтверждением (inline-кнопки).
-- `/help` — справка.
-
-## Состояние / runtime
-
-- `state/topics.json` — JSON-карта `max_chat_id ↔ {topic_id, title}`. Атомарно перезаписывается (tmpfile + os.replace). Critical для непересоздавания топиков. Том должен быть mounted в docker-compose.
-- `state/pymax/*.db` — SQLite-сессии PyMax. Не удалять, иначе при следующем запуске PyMax снова попросит SMS-код или QR-вход.
-- `logs/max2tg.log` — RotatingFileHandler 10MB × 5.
+- `state/topics.json` — карта топиков, не удалять.
+- `state/pymax/*.db` — авторизованная PyMax-сессия, не удалять.
+- `logs/max2tg.log` — rotating log.
+- Контейнер запускается через `docker compose up -d --build`.
 
 ## Тесты
 
-`pytest -q` → 228 passed. asyncio_mode=auto. Покрытие: TopicStore, config, listener helpers (форматирование размеров, throttle), tg_handler (роутинг команд, маршрутизация медиа), max_client опкоды, PyMax auth factory и PyMax adapter.
+`pytest -q` → 145 passed на момент удаления старого клиента. Покрываются config, topics, resolver, PyMax auth/client, маршрутизация, медиа, альбомы и reconnect.
 
-## Деплой
+## Известные ограничения
 
-Docker. `docker-compose.yml` биндит `./logs:/app/logs` и `./state:/app/state`. Алёрт о подключении/обрыве идёт в General-топик.
-
-## Что осталось / known issues
-
-- Голосовые TG → MAX: уходят как `.ogg` файл (FILE), не как voice bubble. Опкод нативной audio-upload неизвестен (issue в vkmax #14 — без ответа). Hunting requires browser-side network capture.
-- Voice MAX → TG: для нового `_type=UNSUPPORTED` нет рабочего download-опкода. Опкод 84/85 — calls service. Probing блокирован WS-disconnect на proto.payload.
-- `/u/<token>` (user share) — opcode 57 ищет в chat-namespace. Server hint «No link or token found» для `{token}` payload — обманчив, реально опкод хочет только `link` URL.
-- Phone/about для контакта — `CONTACT_GET` не возвращает. Нужен другой опкод (предположительно тот же, что юзает web.max.ru при открытии профиля справа).
-- PyMax backend требует live-проверки на реальном аккаунте: unit-тесты покрывают адаптер и контракт, но SMS/QR-login нельзя проверить без интерактивного доступа к MAX.
-- PyMax backend пока не сохраняет legacy text formatting elements при отправке Telegram → MAX.
-
-## Если нужно ребутнуть знание о репо
-
-```bash
-# Локально
-cd /d/DevTools/Database/max2tg
-git status
-pytest -q
-
-# Прод (VPS Kyonix)
-ssh max2tg "cd /opt/max2tg && docker compose ps && docker compose logs --tail=50 max2tg"
-
-# Структура развёртывания
-# - Контейнер max2tg-max2tg-1, образ собран из ./Dockerfile (python:3.12-slim → alpine; работает несмотря на glibc→musl, потому что слои совместимы).
-```
-
-## Ссылки
-
-- Upstream: [Aist/max2tg](https://github.com/Aist/max2tg)
-- Reference opcode-doc: [nsdkinx/vkmax](https://github.com/nsdkinx/vkmax) (особенно [docs/opcodes.md](https://github.com/nsdkinx/vkmax/blob/main/docs/opcodes.md))
-- Официальный бот-API MAX: [max-messenger/max-botapi-python](https://github.com/max-messenger/max-botapi-python) — там же `enums/text_style.py` с правильными именами стилей
-- PyMax: [docs.pymax.org](https://docs.pymax.org/) / PyPI `maxapi-python`
-- Альтернативный мост: [mimimiartartart/MaxToTelegramBridge](https://github.com/mimimiartartart/MaxToTelegramBridge) (one-topic-per-всё, аналогичные паттерны)
+- Некоторые входящие voice attachments MAX не содержат доступного URL; мост отправляет fallback-текст.
+- `/u/<token>` может не открываться через `/add`.
+- Phone/about могут отсутствовать в ответах MAX.
+- PyMax использует неофициальный внутренний API MAX и может ломаться при изменениях протокола.

@@ -21,14 +21,13 @@ class LoggingQrHandler:
 def build_pymax_client(settings: Settings):
     """Build a PyMax client for the configured primary auth flow.
 
-    PyMax is an optional dependency while the legacy MAX client remains the
-    default, so imports stay local to this factory.
+    Imports stay local so configuration errors remain easy to diagnose.
     """
     try:
         from pymax import Client, ExtraConfig, WebClient
     except ImportError as exc:
         raise RuntimeError(
-            "MAX_CLIENT_BACKEND=pymax requires maxapi-python to be installed."
+            "PyMax requires maxapi-python to be installed."
         ) from exc
 
     extra_config = ExtraConfig(

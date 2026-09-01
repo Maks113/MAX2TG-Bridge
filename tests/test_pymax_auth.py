@@ -36,7 +36,6 @@ def test_builds_sms_client(monkeypatch):
     settings = Settings(
         tg_bot_token="tg",
         tg_chat_id="-100",
-        max_client_backend="pymax",
         max_pymax_auth="sms",
         max_phone="+79990000000",
         max_pymax_work_dir="cache/max",
@@ -63,7 +62,6 @@ def test_builds_qr_web_client(monkeypatch):
     settings = Settings(
         tg_bot_token="tg",
         tg_chat_id="-100",
-        max_client_backend="pymax",
         max_pymax_auth="qr",
         max_pymax_work_dir="cache/max",
         max_pymax_session_name="web.db",
@@ -83,7 +81,6 @@ def test_sms_client_requires_phone(monkeypatch):
     settings = Settings(
         tg_bot_token="tg",
         tg_chat_id="-100",
-        max_client_backend="pymax",
         max_pymax_auth="sms",
         max_phone=None,
     )

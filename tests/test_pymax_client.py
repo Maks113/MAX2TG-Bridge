@@ -6,8 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.config import Settings
-from app.max_client import OpCode
-from app.pymax_client import PyMaxClientAdapter, _pymax_message_to_legacy
+from app.pymax_client import PyMaxClient, _message_from_pymax
 
 
 class FakeModel:
@@ -76,14 +75,13 @@ def adapter(monkeypatch):
     settings = Settings(
         tg_bot_token="tg",
         tg_chat_id="-100",
-        max_client_backend="pymax",
         max_pymax_auth="sms",
         max_phone="+79990000000",
     )
-    return PyMaxClientAdapter(settings), raw
+    return PyMaxClient(settings), raw
 
 
-def test_converts_pymax_message_to_legacy_shape():
+def test_converts_pymax_message_to_bridge_shape():
     message = FakeModel(
         id=55,
         chat_id=20,
@@ -94,14 +92,14 @@ def test_converts_pymax_message_to_legacy_shape():
         link=None,
     )
 
-    legacy = _pymax_message_to_legacy(message, my_id=7)
+    bridge_message = _message_from_pymax(message, my_id=7)
 
-    assert legacy.chat_id == 20
-    assert legacy.sender_id == 8
-    assert legacy.message_id == "55"
-    assert legacy.text == "hello"
-    assert legacy.is_self is False
-    assert legacy.attaches == [{"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/i?r=x"}]
+    assert bridge_message.chat_id == 20
+    assert bridge_message.sender_id == 8
+    assert bridge_message.message_id == "55"
+    assert bridge_message.text == "hello"
+    assert bridge_message.is_self is False
+    assert bridge_message.attaches == [{"_type": "PHOTO", "baseUrl": "https://i.oneme.ru/i?r=x"}]
 
 
 async def test_run_emits_ready_snapshot(adapter):
@@ -117,7 +115,33 @@ async def test_run_emits_ready_snapshot(adapter):
     assert snapshot["contacts"][0]["id"] == 8
 
 
-async def test_message_handler_receives_legacy_message(adapter):
+async def test_run_fetches_configured_chats_missing_from_login_sync(monkeypatch):
+    raw = FakeRawClient()
+    raw.chats = [raw.chats[0]]
+    configured_chat = FakeModel(
+        id=-123, type="CHAT", title="Configured group", participants={7: 0, 9: 0}
+    )
+    raw.get_chats = AsyncMock(return_value=[configured_chat])
+    monkeypatch.setattr("app.pymax_client.build_pymax_client", lambda settings: raw)
+    settings = Settings(
+        tg_bot_token="tg",
+        tg_chat_id="-100",
+        max_pymax_auth="sms",
+        max_phone="+79990000000",
+        max_chat_ids="-123",
+    )
+    client = PyMaxClient(settings)
+    on_ready = AsyncMock()
+    client.on_ready(on_ready)
+
+    await client.run()
+
+    raw.get_chats.assert_awaited_once_with([-123])
+    snapshot = on_ready.await_args.args[0]
+    assert snapshot["chats"][1]["title"] == "Configured group"
+
+
+async def test_message_handler_receives_bridge_message(adapter):
     client, raw = adapter
     on_message = AsyncMock()
     client.on_message(on_message)
@@ -155,16 +179,13 @@ async def test_send_message_delegates_to_pymax(adapter):
 async def test_cmd_supports_contacts_and_file_download(adapter):
     client, raw = adapter
 
-    contacts = await client.cmd(OpCode.CONTACT_GET, {"contactIds": [8]})
-    file_info = await client.cmd(
-        OpCode.FILE_DOWNLOAD_URL,
-        {"chatId": 20, "messageId": "77", "fileId": 99},
-    )
+    contacts = await client.fetch_contacts([8])
+    file_url = await client.resolve_file_url(20, "77", 99)
 
     raw.get_users.assert_awaited_once_with([8])
-    raw.get_file_by_id.assert_awaited_once_with(20, "77", 99)
+    raw.get_file_by_id.assert_awaited_once_with(20, 77, 99)
     assert contacts["contacts"][0]["id"] == 8
-    assert file_info["url"] == "https://i.oneme.ru/file.bin"
+    assert file_url == "https://i.oneme.ru/file.bin"
 
 
 async def test_upload_wrappers_return_pymax_files(monkeypatch, adapter):
@@ -176,14 +197,36 @@ async def test_upload_wrappers_return_pymax_files(monkeypatch, adapter):
         def __init__(self, **kwargs):
             self.kwargs = kwargs
 
-    fake_pymax = types.SimpleNamespace(Photo=FakePhoto, File=FakeFile)
+    class FakeVideo:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeVoice:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_pymax = types.SimpleNamespace(
+        Photo=FakePhoto, File=FakeFile, Video=FakeVideo, Voice=FakeVoice
+    )
     monkeypatch.setitem(sys.modules, "pymax", fake_pymax)
     client, _ = adapter
 
     photo = await client.upload_photo(b"img", filename="image.jpg")
     file = await client.upload_file(b"doc", filename="doc.txt")
+    video = await client.upload_video(b"video", filename="clip.mp4")
+    voice = await client.upload_audio(
+        b"voice", filename="voice.ogg", duration=4200
+    )
 
     assert isinstance(photo, FakePhoto)
     assert photo.kwargs == {"raw": b"img", "name": "image.jpg"}
     assert isinstance(file, FakeFile)
     assert file.kwargs == {"raw": b"doc", "name": "doc.txt"}
+    assert isinstance(video, FakeVideo)
+    assert video.kwargs == {"raw": b"video", "name": "clip.mp4"}
+    assert isinstance(voice, FakeVoice)
+    assert voice.kwargs == {
+        "raw": b"voice",
+        "name": "voice.ogg",
+        "duration": 4200,
+    }

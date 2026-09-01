@@ -4,17 +4,27 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-from app.max_listener import create_max_client
+from app.max_listener import configure_pymax_client
+
+
+class FakeClient:
+    def on_ready(self, func):
+        self._on_ready_cb = func
+        return func
+
+    def on_disconnect(self, func):
+        self._on_disconnect_cb = func
+        return func
+
+    def on_message(self, func):
+        self._on_message_cb = func
+        return func
 
 
 def _make_client(sender=None):
     if sender is None:
         sender = AsyncMock()
-    return create_max_client(
-        max_token="tok",
-        max_device_id="dev",
-        sender=sender,
-    ), sender
+    return configure_pymax_client(FakeClient(), sender), sender
 
 
 # ---------------------------------------------------------------------------

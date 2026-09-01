@@ -19,6 +19,10 @@ class TestExtractNameFromContact:
         c = {"names": [{"firstName": "Ivan", "lastName": ""}]}
         assert ContactResolver._extract_name_from_contact(c) == "Ivan"
 
+    def test_names_array_null_last_name(self):
+        c = {"names": [{"firstName": "Ivan", "lastName": None}]}
+        assert ContactResolver._extract_name_from_contact(c) == "Ivan"
+
     def test_names_array_last_only(self):
         c = {"names": [{"firstName": "", "lastName": "Petrov"}]}
         assert ContactResolver._extract_name_from_contact(c) == "Petrov"
